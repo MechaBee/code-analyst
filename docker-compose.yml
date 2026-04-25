@@ -1,0 +1,79 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - control-plane
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: services/control-plane/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      APP_ENV: local
+      APP_NAME: control-plane
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: code-analyst-dev
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+      SANDBOX_SUPERVISOR_URL: http://sandbox-supervisor:8090
+    depends_on:
+      - minio
+      - minio-init
+      - sandbox-supervisor
+
+  sandbox-supervisor:
+    build:
+      context: .
+      dockerfile: services/sandbox-supervisor/Dockerfile
+    ports:
+      - "8090:8090"
+    environment:
+      APP_ENV: local
+      APP_NAME: sandbox-supervisor
+      ANALYSIS_BACKEND: ${ANALYSIS_BACKEND:-deterministic}
+      ANALYSIS_FALLBACK_TO_DETERMINISTIC: ${ANALYSIS_FALLBACK_TO_DETERMINISTIC:-true}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
+      OPENAI_REASONING_EFFORT: ${OPENAI_REASONING_EFFORT:-low}
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: code-analyst-dev
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+      SANDBOX_RUNTIME_IMAGE: code-analyst/sandbox-worker:dev
+      DOCKER_SOCKET_PATH: /var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - minio
+      - minio-init
+
+  minio:
+    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./minio-data:/data
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-03-12T17-29-24Z
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - /bootstrap/create-bucket.sh
+    volumes:
+      - ./infrastructure/minio/create-bucket.sh:/bootstrap/create-bucket.sh:ro

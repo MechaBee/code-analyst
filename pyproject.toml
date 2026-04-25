@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "code-analyst-dev"
+version = "0.1.0"
+description = "Development and integration test harness for the code analyst platform."
+authors = ["Molnár Balázs <balazs.molnar@formula400.hu>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "3.11.11"
+code-analyst-contracts = { path = "packages/contracts-python", develop = true }
+code-analyst-control-plane = { path = "services/control-plane", develop = true }
+code-analyst-sandbox-supervisor = { path = "services/sandbox-supervisor", develop = true }
+
+[tool.poetry.group.dev.dependencies]
+moto = { extras = ["s3"], version = "^5.1.13" }
+pytest = "^8.3.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = [
+    "tests"
+]

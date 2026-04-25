@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "code-analyst-contracts"
+version = "0.1.0"
+description = "Shared contracts for the code analyst local-first platform."
+authors = ["Molnár Balázs <balazs.molnar@formula400.hu>"]
+readme = "README.md"
+packages = [{ include = "code_analyst_contracts", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "3.11.11"
+pydantic = ">=2.7,<3.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Code Analyst</title>
+    <style>
+      :root {
+        --bg: #f3f0e8;
+        --panel: #fffaf1;
+        --ink: #1e241f;
+        --accent: #135d66;
+        --muted: #66706a;
+        --line: #d9d1c4;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(19, 93, 102, 0.12), transparent 25%),
+          linear-gradient(180deg, #f7f4ed 0%, var(--bg) 100%);
+        color: var(--ink);
+      }
+
+      main {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 48px 20px 64px;
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: clamp(2.5rem, 6vw, 4.5rem);
+        line-height: 0.95;
+        letter-spacing: -0.04em;
+      }
+
+      p {
+        color: var(--muted);
+        max-width: 60ch;
+        line-height: 1.6;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+        margin-top: 36px;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: 0 10px 30px rgba(30, 36, 31, 0.06);
+      }
+
+      .card h2 {
+        margin: 0 0 10px;
+        font-size: 1rem;
+      }
+
+      code {
+        background: rgba(19, 93, 102, 0.08);
+        padding: 2px 6px;
+        border-radius: 6px;
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Code Analyst</h1>
+      <p>
+        Local-first scaffold for a code analysis platform built around immutable
+        workspace snapshots, sandboxed execution, conversation persistence, and
+        evidence-backed answers.
+      </p>
+      <div class="grid">
+        <section class="card">
+          <h2>Control Plane</h2>
+          <p>Health: <code>GET /health</code> on port 8080.</p>
+        </section>
+        <section class="card">
+          <h2>Sandbox Supervisor</h2>
+          <p>Health: <code>GET /health</code> on port 8090.</p>
+        </section>
+        <section class="card">
+          <h2>Object Storage</h2>
+          <p>MinIO console runs on port <code>9001</code>.</p>
+        </section>
+        <section class="card">
+          <h2>Next Build Target</h2>
+          <p>Implement GitHub import, snapshot upload, and one question flow.</p>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>
+

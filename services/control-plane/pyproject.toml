@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "code-analyst-control-plane"
+version = "0.1.0"
+description = "Control plane for the code analyst local-first platform."
+authors = ["Molnár Balázs <balazs.molnar@formula400.hu>"]
+readme = "README.md"
+packages = [{ include = "control_plane_app" }]
+
+[tool.poetry.dependencies]
+python = "3.11.11"
+boto3 = "^1.38.0"
+fastapi = ">=0.115,<1.0"
+httpx = "^0.28.1"
+pydantic-settings = ">=2.3,<3.0"
+uvicorn = { extras = ["standard"], version = ">=0.30,<1.0" }
+code-analyst-contracts = { path = "../../packages/contracts-python", develop = true }
+zstandard = "^0.23.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
