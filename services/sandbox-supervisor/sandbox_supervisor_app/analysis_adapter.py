@@ -78,6 +78,114 @@ class DraftAnswer(BaseModel):
     )
 
 
+class _DraftConverter:
+    """Converts DraftAnswer -> AnswerEnvelope with citation validation."""
+
+    def __init__(self, *, require_read_validation: bool = True) -> None:
+        self._require_read_validation = require_read_validation
+
+    def draft_to_answer(
+        self,
+        context: AnalysisContext,
+        draft: DraftAnswer,
+    ) -> AnswerEnvelope:
+        answer_markdown = draft.answer_markdown.strip()
+        if not answer_markdown:
+            raise AnalysisAdapterError("Analysis run returned an empty answer.")
+
+        citations: list[EvidenceRef] = []
+        seen_ranges: set[tuple[str, int, int]] = set()
+        for draft_citation in draft.citations:
+            citation = self.build_citation(context, draft_citation)
+            if citation is None:
+                continue
+            citation_key = (citation.path, citation.start_line, citation.end_line)
+            if citation_key in seen_ranges:
+                continue
+            citations.append(citation)
+            seen_ranges.add(citation_key)
+            if len(citations) == 5:
+                break
+
+        if not citations:
+            raise AnalysisAdapterError(
+                "Analysis run did not produce any valid citations grounded in file reads."
+            )
+
+        followups = [
+            followup.strip()
+            for followup in draft.followups
+            if followup.strip()
+        ][:3]
+        return AnswerEnvelope(
+            answer_markdown=answer_markdown,
+            citations=citations,
+            followups=followups,
+        )
+
+    def build_citation(
+        self,
+        context: AnalysisContext,
+        draft_citation: DraftCitation,
+    ) -> EvidenceRef | None:
+        try:
+            resolved_path = self._resolve_relative_path(
+                context.workspace_root,
+                draft_citation.path,
+            )
+        except ValueError:
+            return None
+
+        lines = self._load_text_lines(resolved_path)
+        if not lines:
+            return None
+
+        relative_path = resolved_path.relative_to(context.workspace_root).as_posix()
+        start_line = min(max(1, draft_citation.start_line), len(lines))
+        end_line = min(max(start_line, draft_citation.end_line), len(lines))
+        if self._require_read_validation and not context.was_read(
+            relative_path, start_line, end_line
+        ):
+            return None
+
+        excerpt_lines = lines[start_line - 1 : end_line]
+        return EvidenceRef(
+            snapshot_id=context.snapshot_id,
+            path=relative_path,
+            start_line=start_line,
+            end_line=end_line,
+            excerpt_hash=self._excerpt_hash(excerpt_lines),
+        )
+
+    def _resolve_relative_path(self, workspace_root: Path, relative_path: str) -> Path:
+        candidate = self._resolve_workspace_entry(workspace_root, relative_path)
+        if not candidate.is_file():
+            raise ValueError("Path does not point to a file.")
+        return candidate
+
+    def _resolve_workspace_entry(self, workspace_root: Path, relative_path: str) -> Path:
+        candidate = (workspace_root / relative_path).resolve()
+        root = workspace_root.resolve()
+        if root != candidate and root not in candidate.parents:
+            raise ValueError("Path escapes the workspace root.")
+        if not candidate.exists():
+            raise ValueError("Path does not exist in the workspace.")
+        return candidate
+
+    def _load_text_lines(self, file_path: Path) -> list[str]:
+        try:
+            return file_path.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError as error:
+            raise AnalysisAdapterError(
+                f"File `{file_path.name}` could not be decoded as UTF-8."
+            ) from error
+
+    def _excerpt_hash(self, lines: list[str]) -> str:
+        excerpt = "\n".join(lines).encode("utf-8")
+        digest = hashlib.sha256(excerpt).hexdigest()
+        return f"sha256:{digest}"
+
+
 class DeterministicAnalysisAdapter:
     def __init__(self, inspector: WorkspaceInspector | None = None) -> None:
         self._inspector = inspector or WorkspaceInspector()
@@ -116,6 +224,7 @@ class OpenAIAnalysisAgentAdapter:
         if self._fallback_adapter is None and self._fallback_to_deterministic:
             self._fallback_adapter = DeterministicAnalysisAdapter()
         self._run_agent_override = run_agent
+        self._converter = _DraftConverter(require_read_validation=True)
 
     async def analyze(
         self,
@@ -136,7 +245,7 @@ class OpenAIAnalysisAgentAdapter:
 
         try:
             draft = await self._run_agent(context, question)
-            return self._draft_to_answer(context, draft)
+            return self._converter.draft_to_answer(context, draft)
         except AnalysisAdapterConfigurationError:
             raise
         except AnalysisAdapterError:
@@ -386,79 +495,6 @@ class OpenAIAnalysisAgentAdapter:
             )
         return final_output
 
-    def _draft_to_answer(
-        self,
-        context: AnalysisContext,
-        draft: DraftAnswer,
-    ) -> AnswerEnvelope:
-        answer_markdown = draft.answer_markdown.strip()
-        if not answer_markdown:
-            raise AnalysisAdapterError(
-                "OpenAI analysis run returned an empty answer."
-            )
-
-        citations: list[EvidenceRef] = []
-        seen_ranges: set[tuple[str, int, int]] = set()
-        for draft_citation in draft.citations:
-            citation = self._build_citation(context, draft_citation)
-            if citation is None:
-                continue
-            citation_key = (citation.path, citation.start_line, citation.end_line)
-            if citation_key in seen_ranges:
-                continue
-            citations.append(citation)
-            seen_ranges.add(citation_key)
-            if len(citations) == 5:
-                break
-
-        if not citations:
-            raise AnalysisAdapterError(
-                "OpenAI analysis run did not produce any valid citations grounded in file reads."
-            )
-
-        followups = [
-            followup.strip()
-            for followup in draft.followups
-            if followup.strip()
-        ][:3]
-        return AnswerEnvelope(
-            answer_markdown=answer_markdown,
-            citations=citations,
-            followups=followups,
-        )
-
-    def _build_citation(
-        self,
-        context: AnalysisContext,
-        draft_citation: DraftCitation,
-    ) -> EvidenceRef | None:
-        try:
-            resolved_path = self._resolve_relative_path(
-                context.workspace_root,
-                draft_citation.path,
-            )
-        except ValueError:
-            return None
-
-        lines = self._load_text_lines(resolved_path)
-        if not lines:
-            return None
-
-        relative_path = resolved_path.relative_to(context.workspace_root).as_posix()
-        start_line = min(max(1, draft_citation.start_line), len(lines))
-        end_line = min(max(start_line, draft_citation.end_line), len(lines))
-        if not context.was_read(relative_path, start_line, end_line):
-            return None
-
-        excerpt_lines = lines[start_line - 1 : end_line]
-        return EvidenceRef(
-            snapshot_id=context.snapshot_id,
-            path=relative_path,
-            start_line=start_line,
-            end_line=end_line,
-            excerpt_hash=self._excerpt_hash(excerpt_lines),
-        )
-
     def _extract_keywords(self, query: str) -> list[str]:
         words = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{2,}", query.lower())
         keywords = [
@@ -468,36 +504,219 @@ class OpenAIAnalysisAgentAdapter:
         ]
         return list(dict.fromkeys(keywords))
 
-    def _resolve_relative_path(self, workspace_root: Path, relative_path: str) -> Path:
-        candidate = self._resolve_workspace_entry(workspace_root, relative_path)
-        if not candidate.is_file():
-            raise ValueError("Path does not point to a file.")
-        return candidate
 
-    def _resolve_workspace_entry(self, workspace_root: Path, relative_path: str) -> Path:
-        candidate = (workspace_root / relative_path).resolve()
-        root = workspace_root.resolve()
-        if root != candidate and root not in candidate.parents:
-            raise ValueError("Path escapes the workspace root.")
-        if not candidate.exists():
-            raise ValueError("Path does not exist in the workspace.")
-        return candidate
+class ClaudeAgentAnalysisAdapter:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        fallback_adapter: DeterministicAnalysisAdapter | None = None,
+        run_query: Callable[[Path, str, str], Awaitable[DraftAnswer]] | None = None,
+    ) -> None:
+        self._settings = settings
+        self._fallback_to_deterministic = settings.analysis_fallback_to_deterministic
+        self._fallback_adapter = fallback_adapter
+        if self._fallback_adapter is None and self._fallback_to_deterministic:
+            self._fallback_adapter = DeterministicAnalysisAdapter()
+        self._run_query_override = run_query
+        self._converter = _DraftConverter(require_read_validation=False)
 
-    def _load_text_lines(self, file_path: Path) -> list[str]:
+    async def analyze(
+        self,
+        *,
+        workspace_root: Path | str,
+        snapshot_id: str,
+        question: str,
+        top_level_entries: list[str],
+    ) -> AnswerEnvelope:
+        workspace_path = Path(workspace_root)
+        context = AnalysisContext(
+            workspace_root=workspace_path,
+            snapshot_id=snapshot_id,
+            top_level_entries=top_level_entries,
+            max_search_results=self._settings.analysis_max_search_results,
+            max_read_lines=self._settings.analysis_max_read_lines,
+            max_list_files=self._settings.analysis_max_list_files,
+        )
+
         try:
-            return file_path.read_text(encoding="utf-8").splitlines()
-        except UnicodeDecodeError as error:
+            draft = await self._run_query(workspace_path, question, snapshot_id)
+            return self._converter.draft_to_answer(context, draft)
+        except AnalysisAdapterConfigurationError:
+            raise
+        except AnalysisAdapterError:
+            if self._fallback_adapter is not None and self._fallback_to_deterministic:
+                return await self._fallback_adapter.analyze(
+                    workspace_root=workspace_root,
+                    snapshot_id=snapshot_id,
+                    question=question,
+                    top_level_entries=top_level_entries,
+                )
+            raise
+        except Exception as error:
+            if self._fallback_adapter is not None and self._fallback_to_deterministic:
+                return await self._fallback_adapter.analyze(
+                    workspace_root=workspace_root,
+                    snapshot_id=snapshot_id,
+                    question=question,
+                    top_level_entries=top_level_entries,
+                )
             raise AnalysisAdapterError(
-                f"File `{file_path.name}` could not be decoded as UTF-8."
+                "Claude analysis run failed before a grounded answer was produced."
             ) from error
 
-    def _excerpt_hash(self, lines: list[str]) -> str:
-        excerpt = "\n".join(lines).encode("utf-8")
-        digest = hashlib.sha256(excerpt).hexdigest()
-        return f"sha256:{digest}"
+    async def _run_query(
+        self,
+        workspace_path: Path,
+        question: str,
+        snapshot_id: str,
+    ) -> DraftAnswer:
+        if self._run_query_override is not None:
+            return await self._run_query_override(workspace_path, question, snapshot_id)
+        return await self._run_query_with_sdk(workspace_path, question, snapshot_id)
+
+    async def _run_query_with_sdk(
+        self,
+        workspace_path: Path,
+        question: str,
+        snapshot_id: str,
+    ) -> DraftAnswer:
+        api_key = self._settings.anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise AnalysisAdapterConfigurationError(
+                "ANALYSIS_BACKEND is set to `claude`, but ANTHROPIC_API_KEY is not configured."
+            )
+        # Ensure the key is available in the environment for the SDK subprocess
+        if os.getenv("ANTHROPIC_API_KEY") is None:
+            os.environ["ANTHROPIC_API_KEY"] = api_key
+
+        try:
+            from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+        except ImportError as error:
+            raise AnalysisAdapterConfigurationError(
+                "The sandbox supervisor Claude backend requires the `claude-agent-sdk` package."
+            ) from error
+
+        try:
+            top_items = [
+                entry.name
+                for entry in sorted(workspace_path.iterdir())
+                if not entry.name.startswith(".")
+            ][:20]
+        except OSError:
+            top_items = []
+        workspace_summary = ", ".join(top_items) or "(empty workspace root)"
+
+        system_prompt = (
+            "You are a codebase analysis agent. "
+            "Inspect the workspace using Read, Glob, and Grep tools before answering. "
+            "Ground every material claim in file content you actually read. "
+            "Prefer concise, high-signal answers. Keep citations tight and exact. "
+            "When you are ready to answer, write your response in Markdown and then "
+            "end with a JSON code block containing exactly this structure:\n\n"
+            "```json\n"
+            '{"answer_markdown": "...", "citations": [{"path": "...", "start_line": 1, "end_line": 2}], "followups": ["..."]}\n'
+            "```"
+        )
+
+        prompt = (
+            f"Workspace top-level entries: {workspace_summary}\n\n"
+            f"Snapshot ID: {snapshot_id}\n\n"
+            f"Answer this question about the materialized codebase:\n{question}\n\n"
+            "Remember to end your response with a JSON code block containing citations."
+        )
+
+        result_message: ResultMessage | None = None
+        stderr_lines: list[str] = []
+
+        def _capture_stderr(line: str) -> None:
+            stderr_lines.append(line)
+
+        try:
+            async for message in query(
+                prompt=prompt,
+                options=ClaudeAgentOptions(
+                    allowed_tools=["Read", "Glob", "Grep"],
+                    system_prompt=system_prompt,
+                    cwd=workspace_path,
+                    max_turns=40,
+                    model=self._settings.claude_model,
+                    stderr=_capture_stderr,
+                ),
+            ):
+                if isinstance(message, ResultMessage):
+                    result_message = message
+        except Exception as loop_error:
+            if result_message is None:
+                detail = ""
+                if stderr_lines:
+                    detail = "\nClaude CLI stderr:\n" + "".join(stderr_lines[-20:])
+                raise AnalysisAdapterError(
+                    "Claude analysis run failed before a grounded answer was produced." + detail
+                ) from loop_error
+
+        if result_message is None:
+            detail = ""
+            if stderr_lines:
+                detail = "\nClaude CLI stderr:\n" + "".join(stderr_lines[-20:])
+            raise AnalysisAdapterError(
+                "Claude analysis run completed without producing a result message." + detail
+            )
+
+        if result_message.is_error and result_message.errors:
+            detail = "\n".join(result_message.errors)
+            if stderr_lines:
+                detail += "\nClaude CLI stderr:\n" + "".join(stderr_lines[-20:])
+            raise AnalysisAdapterError(
+                f"Claude analysis run reported errors:\n{detail}"
+            )
+
+        structured: dict[str, object] | None = None
+
+        # Prefer structured_output if the SDK parsed it.
+        if result_message.structured_output is not None and isinstance(
+            result_message.structured_output, dict
+        ):
+            structured = result_message.structured_output
+
+        if structured is None and result_message.result:
+            # Try to extract JSON block from the free-text result.
+            match = re.search(r"```json\s*(\{.*?\})\s*```", result_message.result, re.DOTALL)
+            if match:
+                try:
+                    structured = json.loads(match.group(1))
+                except json.JSONDecodeError as error:
+                    raise AnalysisAdapterError(
+                        "Claude analysis result contained a malformed JSON block."
+                    ) from error
+            else:
+                # Fallback: try parsing the entire result as JSON.
+                try:
+                    structured = json.loads(result_message.result)
+                except json.JSONDecodeError:
+                    pass
+
+        if not isinstance(structured, dict):
+            detail = ""
+            if result_message.result:
+                detail = f"\nRaw result (first 500 chars): {result_message.result[:500]!r}"
+            if stderr_lines:
+                detail += "\nClaude CLI stderr:\n" + "".join(stderr_lines[-20:])
+            raise AnalysisAdapterError(
+                "Claude analysis run did not produce a parseable JSON answer." + detail
+            )
+
+        try:
+            return DraftAnswer.model_validate(structured)
+        except Exception as error:
+            raise AnalysisAdapterError(
+                "Claude analysis structured output did not match DraftAnswer schema."
+            ) from error
 
 
-def build_analysis_adapter(settings: Settings) -> DeterministicAnalysisAdapter | OpenAIAnalysisAgentAdapter:
+def build_analysis_adapter(
+    settings: Settings,
+) -> DeterministicAnalysisAdapter | OpenAIAnalysisAgentAdapter | ClaudeAgentAnalysisAdapter:
     deterministic = DeterministicAnalysisAdapter()
     backend = settings.analysis_backend.strip().lower()
     if backend == "deterministic":
@@ -505,6 +724,12 @@ def build_analysis_adapter(settings: Settings) -> DeterministicAnalysisAdapter |
     if backend == "openai":
         fallback = deterministic if settings.analysis_fallback_to_deterministic else None
         return OpenAIAnalysisAgentAdapter(
+            settings=settings,
+            fallback_adapter=fallback,
+        )
+    if backend == "claude":
+        fallback = deterministic if settings.analysis_fallback_to_deterministic else None
+        return ClaudeAgentAnalysisAdapter(
             settings=settings,
             fallback_adapter=fallback,
         )

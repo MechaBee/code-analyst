@@ -9,6 +9,7 @@ packages = [{ include = "sandbox_supervisor_app" }]
 [tool.poetry.dependencies]
 python = "3.11.11"
 boto3 = "^1.38.0"
+claude-agent-sdk = "^0.1.68"
 fastapi = ">=0.115,<1.0"
 openai-agents = "^0.14.2"
 pydantic-settings = ">=2.3,<3.0"
