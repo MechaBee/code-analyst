@@ -13,6 +13,7 @@ from control_plane_app.object_store import ObjectStore as ControlPlaneObjectStor
 from control_plane_app.question_orchestrator import QuestionOrchestrator
 from control_plane_app.sandbox_supervisor_client import SandboxSupervisorClient
 from control_plane_app.state_store import (
+    ApprovalStateStore,
     ConversationStateStore,
     RunStateStore,
     WorkspaceStateStore,
@@ -68,6 +69,7 @@ def build_control_plane_state(
     state.workspace_store = WorkspaceStateStore(state.object_store)
     state.conversation_store = ConversationStateStore(state.object_store)
     state.run_store = RunStateStore(state.object_store)
+    state.approval_store = ApprovalStateStore(state.object_store)
     state.workspace_import_service = WorkspaceImportService(
         settings=settings,
         object_store=state.object_store,
@@ -80,6 +82,7 @@ def build_control_plane_state(
         conversation_store=state.conversation_store,
         run_store=state.run_store,
         workspace_store=state.workspace_store,
+        approval_store=state.approval_store,
     )
     return state
 

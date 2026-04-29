@@ -1,4 +1,52 @@
-FROM nginx:1.27-alpine
+# syntax=docker/dockerfile:1
+FROM node:24-alpine AS builder
 
-COPY apps/web/index.html /usr/share/nginx/html/index.html
+WORKDIR /app
 
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Copy package manifests
+COPY apps/web/package.json ./
+COPY apps/web/pnpm-lock.yaml* ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile || pnpm install
+
+# Copy source
+COPY apps/web/tsconfig.json ./
+COPY apps/web/next.config.ts ./
+COPY apps/web/tailwind.config.ts ./
+COPY apps/web/postcss.config.mjs ./
+COPY apps/web/next-env.d.ts ./
+COPY apps/web/src ./src
+COPY apps/web/server ./server
+COPY apps/web/server/tsconfig.json ./server/tsconfig.json
+
+# Build Next.js static export
+RUN pnpm build
+
+# --- Production stage ---
+FROM node:24-alpine AS runner
+
+WORKDIR /app
+
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+ENV NODE_ENV=production
+ENV PORT=3000
+
+# Copy package manifest and install production deps only
+COPY apps/web/package.json ./
+COPY apps/web/pnpm-lock.yaml ./
+RUN pnpm install --prod --frozen-lockfile || pnpm install --prod
+
+# Copy built assets and server
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/server ./server
+COPY --from=builder /app/server/tsconfig.json ./server/tsconfig.json
+
+EXPOSE 3000
+
+CMD ["pnpm", "start"]

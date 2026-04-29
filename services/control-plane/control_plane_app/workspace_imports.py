@@ -197,9 +197,13 @@ class WorkspaceImportService:
             cwd=target_dir.parent,
         )
 
+        resolved_ref = ref.strip() if ref else ""
+        if not resolved_ref:
+            resolved_ref = self._detect_default_branch(target_dir)
+
         fetch_commands = [
-            ["fetch", "--depth", "1", "origin", ref],
-            ["fetch", "origin", ref],
+            ["fetch", "--depth", "1", "origin", resolved_ref],
+            ["fetch", "origin", resolved_ref],
         ]
         last_error: subprocess.CalledProcessError | None = None
         for command in fetch_commands:
@@ -213,6 +217,32 @@ class WorkspaceImportService:
         if last_error is None:
             raise WorkspaceImportError("Repository fetch failed without a git error")
         raise WorkspaceImportError(last_error.stderr.strip() or "Failed to fetch ref")
+
+    def _detect_default_branch(self, target_dir: Path) -> str:
+        """Attempt to detect the remote default branch (HEAD)."""
+        try:
+            result = self._run_git(
+                ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
+                cwd=target_dir,
+            )
+            branch = result.stdout.strip().replace("origin/", "")
+            if branch:
+                return branch
+        except subprocess.CalledProcessError:
+            pass
+
+        # Fallback: try common default branch names
+        for fallback in ("main", "master"):
+            try:
+                self._run_git(["fetch", "--depth", "1", "origin", fallback], cwd=target_dir)
+                return fallback
+            except subprocess.CalledProcessError:
+                continue
+
+        raise WorkspaceImportError(
+            "Could not auto-detect the repository default branch. "
+            "Please provide an explicit ref (e.g., main, master, or a tag name)."
+        )
 
     def _resolve_commit_sha(self, repo_dir: Path) -> str:
         completed = self._run_git(["rev-parse", "HEAD"], cwd=repo_dir)

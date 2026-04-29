@@ -4,7 +4,11 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
     ports:
-      - "3000:80"
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      CONTROL_PLANE_URL: http://control-plane:8080
+      NODE_ENV: production
     depends_on:
       - control-plane
 
@@ -24,6 +28,7 @@ services:
       S3_ACCESS_KEY_ID: minioadmin
       S3_SECRET_ACCESS_KEY: minioadmin
       SANDBOX_SUPERVISOR_URL: http://sandbox-supervisor:8090
+      SANDBOX_SUPERVISOR_TIMEOUT_SECONDS: 280
     depends_on:
       - minio
       - minio-init
@@ -38,8 +43,9 @@ services:
     environment:
       APP_ENV: local
       APP_NAME: sandbox-supervisor
-      ANALYSIS_BACKEND: ${ANALYSIS_BACKEND:-deterministic}
-      ANALYSIS_FALLBACK_TO_DETERMINISTIC: ${ANALYSIS_FALLBACK_TO_DETERMINISTIC:-true}
+      ANALYSIS_BACKEND: ${ANALYSIS_BACKEND:-claude}
+      ANALYSIS_FALLBACK_TO_DETERMINISTIC: ${ANALYSIS_FALLBACK_TO_DETERMINISTIC:-false}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
       OPENAI_REASONING_EFFORT: ${OPENAI_REASONING_EFFORT:-low}

@@ -12,6 +12,7 @@ from control_plane_app.object_store import ObjectStore as ControlPlaneObjectStor
 from control_plane_app.question_orchestrator import QuestionOrchestrator
 from control_plane_app.sandbox_supervisor_client import SandboxSupervisorClient
 from control_plane_app.state_store import (
+    ApprovalStateStore,
     ConversationStateStore,
     RunStateStore,
     WorkspaceStateStore,
@@ -96,6 +97,7 @@ def test_question_flow_calls_sandbox_supervisor(
         control_plane_state.object_store
     )
     control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
+    control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
     control_plane_state.workspace_import_service = WorkspaceImportService(
         settings=control_plane_settings,
         object_store=control_plane_state.object_store,
@@ -108,6 +110,7 @@ def test_question_flow_calls_sandbox_supervisor(
         conversation_store=control_plane_state.conversation_store,
         run_store=control_plane_state.run_store,
         workspace_store=control_plane_state.workspace_store,
+        approval_store=control_plane_state.approval_store,
     )
     control_plane_app.state.state = control_plane_state
 
@@ -178,3 +181,357 @@ def test_question_flow_calls_sandbox_supervisor(
     assert conversation_head.active_sandbox_id == run_state.sandbox_id
     assert conversation_head.latest_run_id == run_payload["run_id"]
     assert len(sandbox_supervisor_app.state.state.sessions) == 1
+
+
+@mock_aws
+def test_question_flow_disposes_sandbox_when_not_resuming(
+    tmp_path: Path,
+    sample_git_repo: Path,
+) -> None:
+    bucket_name = "code-analyst-dispose-test"
+    boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
+
+    control_plane_settings = ControlPlaneSettings(
+        s3_endpoint=None,
+        s3_bucket=bucket_name,
+        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
+        sandbox_supervisor_url="http://sandbox-supervisor",
+    )
+    sandbox_settings = SandboxSupervisorSettings(
+        s3_endpoint=None,
+        s3_bucket=bucket_name,
+        workspace_root_dir=str(tmp_path / "sandboxes"),
+    )
+
+    supervisor_state = SandboxSupervisorAppState()
+    supervisor_state.sessions = {}
+    supervisor_state.materializer = WorkspaceMaterializer(
+        settings=sandbox_settings,
+        object_store=SandboxObjectStore(sandbox_settings),
+    )
+    supervisor_state.analysis_adapter = DeterministicAnalysisAdapter()
+    sandbox_supervisor_app.state.state = supervisor_state
+
+    sandbox_transport = httpx.ASGITransport(app=sandbox_supervisor_app)
+    control_plane_state = ControlPlaneAppState()
+    control_plane_state.object_store = ControlPlaneObjectStore(control_plane_settings)
+    control_plane_state.workspace_store = WorkspaceStateStore(control_plane_state.object_store)
+    control_plane_state.conversation_store = ConversationStateStore(
+        control_plane_state.object_store
+    )
+    control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
+    control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
+    control_plane_state.workspace_import_service = WorkspaceImportService(
+        settings=control_plane_settings,
+        object_store=control_plane_state.object_store,
+    )
+    control_plane_state.question_orchestrator = QuestionOrchestrator(
+        sandbox_client=SandboxSupervisorClient(
+            "http://sandbox-supervisor",
+            transport=sandbox_transport,
+        ),
+        conversation_store=control_plane_state.conversation_store,
+        run_store=control_plane_state.run_store,
+        workspace_store=control_plane_state.workspace_store,
+        approval_store=control_plane_state.approval_store,
+    )
+    control_plane_app.state.state = control_plane_state
+
+    client = TestClient(control_plane_app)
+
+    import_response = client.post(
+        "/v1/workspaces/imports/github",
+        json={
+            "tenant_id": "tenant_test",
+            "repo_url": str(sample_git_repo),
+            "ref": "main",
+            "github_credential_ref": "public",
+        },
+    )
+    assert import_response.status_code == 200
+    snapshot_payload = import_response.json()
+
+    conversation_response = client.post(
+        "/v1/conversations",
+        json={
+            "tenant_id": "tenant_test",
+            "workspace_id": snapshot_payload["workspace_id"],
+            "title": "Dispose test conversation",
+        },
+    )
+    assert conversation_response.status_code == 200
+    conversation_id = conversation_response.json()["conversation_id"]
+
+    question_response = client.post(
+        f"/v1/conversations/{conversation_id}/questions",
+        json={
+            "message": "Summarize the workspace that was imported.",
+            "resume_sandbox": False,
+        },
+    )
+    assert question_response.status_code == 200
+    run_payload = question_response.json()
+    assert run_payload["status"] == "COMPLETED"
+
+    # The sandbox should have been disposed because resume_sandbox=False
+    assert len(sandbox_supervisor_app.state.state.sessions) == 0
+
+    run_state = control_plane_app.state.state.run_store.get_run(run_payload["run_id"])
+    assert run_state is not None
+    assert run_state.sandbox_id is not None
+    assert run_state.answer is not None
+
+    conversation_head = control_plane_app.state.state.conversation_store.get_conversation(
+        conversation_id
+    )
+    assert conversation_head is not None
+    assert conversation_head.active_sandbox_id == run_state.sandbox_id
+
+
+@mock_aws
+def test_question_flow_requires_approval_and_approves(
+    tmp_path: Path,
+    sample_git_repo: Path,
+) -> None:
+    bucket_name = "code-analyst-approval-test"
+    boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
+
+    control_plane_settings = ControlPlaneSettings(
+        s3_endpoint=None,
+        s3_bucket=bucket_name,
+        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
+        sandbox_supervisor_url="http://sandbox-supervisor",
+    )
+    sandbox_settings = SandboxSupervisorSettings(
+        s3_endpoint=None,
+        s3_bucket=bucket_name,
+        workspace_root_dir=str(tmp_path / "sandboxes"),
+    )
+
+    supervisor_state = SandboxSupervisorAppState()
+    supervisor_state.sessions = {}
+    supervisor_state.materializer = WorkspaceMaterializer(
+        settings=sandbox_settings,
+        object_store=SandboxObjectStore(sandbox_settings),
+    )
+    supervisor_state.analysis_adapter = DeterministicAnalysisAdapter()
+    sandbox_supervisor_app.state.state = supervisor_state
+
+    sandbox_transport = httpx.ASGITransport(app=sandbox_supervisor_app)
+    control_plane_state = ControlPlaneAppState()
+    control_plane_state.object_store = ControlPlaneObjectStore(control_plane_settings)
+    control_plane_state.workspace_store = WorkspaceStateStore(control_plane_state.object_store)
+    control_plane_state.conversation_store = ConversationStateStore(
+        control_plane_state.object_store
+    )
+    control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
+    control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
+    control_plane_state.workspace_import_service = WorkspaceImportService(
+        settings=control_plane_settings,
+        object_store=control_plane_state.object_store,
+    )
+    control_plane_state.question_orchestrator = QuestionOrchestrator(
+        sandbox_client=SandboxSupervisorClient(
+            "http://sandbox-supervisor",
+            transport=sandbox_transport,
+        ),
+        conversation_store=control_plane_state.conversation_store,
+        run_store=control_plane_state.run_store,
+        workspace_store=control_plane_state.workspace_store,
+        approval_store=control_plane_state.approval_store,
+    )
+    control_plane_app.state.state = control_plane_state
+
+    client = TestClient(control_plane_app)
+
+    import_response = client.post(
+        "/v1/workspaces/imports/github",
+        json={
+            "tenant_id": "tenant_test",
+            "repo_url": str(sample_git_repo),
+            "ref": "main",
+            "github_credential_ref": "public",
+        },
+    )
+    assert import_response.status_code == 200
+    snapshot_payload = import_response.json()
+
+    conversation_response = client.post(
+        "/v1/conversations",
+        json={
+            "tenant_id": "tenant_test",
+            "workspace_id": snapshot_payload["workspace_id"],
+            "title": "Approval flow conversation",
+        },
+    )
+    assert conversation_response.status_code == 200
+    conversation_id = conversation_response.json()["conversation_id"]
+
+    # Ask a question with approval_policy=required
+    question_response = client.post(
+        f"/v1/conversations/{conversation_id}/questions",
+        json={
+            "message": "Summarize the workspace that was imported.",
+            "resume_sandbox": False,
+            "approval_policy": "required",
+        },
+    )
+    assert question_response.status_code == 200
+    run_payload = question_response.json()
+    assert run_payload["status"] == "PENDING_APPROVAL"
+    run_id = run_payload["run_id"]
+
+    # Run should be pending approval, no sandbox created yet
+    run_state = control_plane_app.state.state.run_store.get_run(run_id)
+    assert run_state is not None
+    assert run_state.status.value == "PENDING_APPROVAL"
+    assert run_state.pending_approval_id is not None
+    assert run_state.sandbox_id is None
+
+    # Events should include approval.required
+    events_response = client.get(run_payload["events_url"])
+    assert events_response.status_code == 200
+    body = events_response.text
+    assert "event: approval.required" in body
+
+    # Resolve the approval with "approve"
+    approval_id = run_state.pending_approval_id
+    approval_response = client.post(
+        f"/v1/runs/{run_id}/approvals/{approval_id}",
+        json={"decision": "approve", "reason": "Looks good"},
+    )
+    assert approval_response.status_code == 200
+    approval_payload = approval_response.json()
+    assert approval_payload["status"] == "COMPLETED"
+
+    # Run should now be completed
+    run_state = control_plane_app.state.state.run_store.get_run(run_id)
+    assert run_state is not None
+    assert run_state.status.value == "COMPLETED"
+    assert run_state.answer is not None
+    assert len(run_state.answer.citations) == 2
+
+    # Sandbox should have been disposed because resume_sandbox=False
+    assert len(sandbox_supervisor_app.state.state.sessions) == 0
+
+
+@mock_aws
+def test_question_flow_requires_approval_and_denies(
+    tmp_path: Path,
+    sample_git_repo: Path,
+) -> None:
+    bucket_name = "code-analyst-approval-deny-test"
+    boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
+
+    control_plane_settings = ControlPlaneSettings(
+        s3_endpoint=None,
+        s3_bucket=bucket_name,
+        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
+        sandbox_supervisor_url="http://sandbox-supervisor",
+    )
+    sandbox_settings = SandboxSupervisorSettings(
+        s3_endpoint=None,
+        s3_bucket=bucket_name,
+        workspace_root_dir=str(tmp_path / "sandboxes"),
+    )
+
+    supervisor_state = SandboxSupervisorAppState()
+    supervisor_state.sessions = {}
+    supervisor_state.materializer = WorkspaceMaterializer(
+        settings=sandbox_settings,
+        object_store=SandboxObjectStore(sandbox_settings),
+    )
+    supervisor_state.analysis_adapter = DeterministicAnalysisAdapter()
+    sandbox_supervisor_app.state.state = supervisor_state
+
+    sandbox_transport = httpx.ASGITransport(app=sandbox_supervisor_app)
+    control_plane_state = ControlPlaneAppState()
+    control_plane_state.object_store = ControlPlaneObjectStore(control_plane_settings)
+    control_plane_state.workspace_store = WorkspaceStateStore(control_plane_state.object_store)
+    control_plane_state.conversation_store = ConversationStateStore(
+        control_plane_state.object_store
+    )
+    control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
+    control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
+    control_plane_state.workspace_import_service = WorkspaceImportService(
+        settings=control_plane_settings,
+        object_store=control_plane_state.object_store,
+    )
+    control_plane_state.question_orchestrator = QuestionOrchestrator(
+        sandbox_client=SandboxSupervisorClient(
+            "http://sandbox-supervisor",
+            transport=sandbox_transport,
+        ),
+        conversation_store=control_plane_state.conversation_store,
+        run_store=control_plane_state.run_store,
+        workspace_store=control_plane_state.workspace_store,
+        approval_store=control_plane_state.approval_store,
+    )
+    control_plane_app.state.state = control_plane_state
+
+    client = TestClient(control_plane_app)
+
+    import_response = client.post(
+        "/v1/workspaces/imports/github",
+        json={
+            "tenant_id": "tenant_test",
+            "repo_url": str(sample_git_repo),
+            "ref": "main",
+            "github_credential_ref": "public",
+        },
+    )
+    assert import_response.status_code == 200
+    snapshot_payload = import_response.json()
+
+    conversation_response = client.post(
+        "/v1/conversations",
+        json={
+            "tenant_id": "tenant_test",
+            "workspace_id": snapshot_payload["workspace_id"],
+            "title": "Approval deny conversation",
+        },
+    )
+    assert conversation_response.status_code == 200
+    conversation_id = conversation_response.json()["conversation_id"]
+
+    question_response = client.post(
+        f"/v1/conversations/{conversation_id}/questions",
+        json={
+            "message": "Summarize the workspace that was imported.",
+            "resume_sandbox": False,
+            "approval_policy": "required",
+        },
+    )
+    assert question_response.status_code == 200
+    run_payload = question_response.json()
+    assert run_payload["status"] == "PENDING_APPROVAL"
+    run_id = run_payload["run_id"]
+
+    run_state = control_plane_app.state.state.run_store.get_run(run_id)
+    assert run_state is not None
+    approval_id = run_state.pending_approval_id
+    assert approval_id is not None
+
+    # Resolve with "deny"
+    approval_response = client.post(
+        f"/v1/runs/{run_id}/approvals/{approval_id}",
+        json={"decision": "deny", "reason": "Not authorized"},
+    )
+    assert approval_response.status_code == 200
+    approval_payload = approval_response.json()
+    assert approval_payload["status"] == "FAILED"
+
+    # Run should be failed, no sandbox created
+    run_state = control_plane_app.state.state.run_store.get_run(run_id)
+    assert run_state is not None
+    assert run_state.status.value == "FAILED"
+    assert run_state.sandbox_id is None
+    assert run_state.answer is None
+    assert len(sandbox_supervisor_app.state.state.sessions) == 0
+
+    # Events should include run.failed
+    events_response = client.get(run_payload["events_url"])
+    assert events_response.status_code == 200
+    body = events_response.text
+    assert "event: run.failed" in body
+    assert "Not authorized" in body

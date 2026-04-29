@@ -6,8 +6,8 @@ class Settings(BaseSettings):
 
     app_name: str = "sandbox-supervisor"
     app_env: str = "local"
-    analysis_backend: str = "deterministic"
-    analysis_fallback_to_deterministic: bool = True
+    analysis_backend: str = "claude"
+    analysis_fallback_to_deterministic: bool = False
     analysis_max_search_results: int = 8
     analysis_max_read_lines: int = 120
     analysis_max_list_files: int = 200

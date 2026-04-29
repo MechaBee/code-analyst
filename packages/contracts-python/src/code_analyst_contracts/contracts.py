@@ -16,6 +16,7 @@ class Status(str, Enum):
     OPEN = "OPEN"
     STARTED = "STARTED"
     RUNNING = "RUNNING"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
     RESUMED = "RESUMED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
@@ -74,6 +75,7 @@ class QuestionRequest(BaseModel):
     message: str
     workspace_snapshot_id: str | None = None
     resume_sandbox: bool = True
+    approval_policy: str = "auto"  # "auto" | "required"
 
 
 class QuestionResponse(BaseModel):
@@ -91,6 +93,15 @@ class ApprovalDecisionResponse(BaseModel):
     run_id: str
     approval_id: str
     status: Status = Status.RESUMED
+
+
+class ApprovalState(BaseModel):
+    approval_id: str
+    run_id: str
+    decision: str | None = None
+    reason: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    resolved_at: datetime | None = None
 
 
 class WorkspaceSnapshotRef(BaseModel):

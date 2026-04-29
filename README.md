@@ -43,7 +43,7 @@ docker compose up --build
 
 Available endpoints:
 
-- `http://localhost:3000`: web placeholder
+- `http://localhost:3000`: interactive chat UI (import repo, ask questions, view citations)
 - `http://localhost:8080/health`: control-plane health
 - `http://localhost:8090/health`: sandbox-supervisor health
 - `http://localhost:9001`: MinIO console
@@ -107,31 +107,59 @@ This means the control-plane can be reinitialized and still:
 3. replay stored run events by run ID
 4. continue a conversation using the persisted active sandbox reference
 
-The sandbox execution step now performs grounded local inspection over the
-materialized workspace. The current implementation:
+The sandbox execution step now performs grounded analysis over the
+materialized workspace using the Claude agent adapter by default.
 
-1. scans readable text files in the workspace
-2. finds keyword-matching snippets or summary fallbacks such as `README.md` and declarations
-3. builds a citation-backed answer using actual file contents and line ranges
+### Analysis backend configuration
 
-The sandbox-supervisor now also supports an opt-in `AnalysisAgentAdapter` layer
-based on the OpenAI Agents SDK. In `ANALYSIS_BACKEND=openai` mode it:
+The default analysis backend is **Claude** (`ANALYSIS_BACKEND=claude`).
+To use it, you must provide an Anthropic API key:
 
-1. runs an agent over the materialized workspace
-2. exposes local runtime tools to list files, search text, and read file excerpts
-3. requires citations to map back to file ranges that were actually read
-4. falls back to the deterministic backend if the model answer is not grounded and
-   `ANALYSIS_FALLBACK_TO_DETERMINISTIC=true`
+**Option A — export on the host:**
+```bash
+export ANTHROPIC_API_KEY="sk-ant-api03-..."
+docker compose up --build
+```
 
-For local exploration, the default remains `ANALYSIS_BACKEND=deterministic`.
-To enable the agent-backed path, provide `OPENAI_API_KEY` to the
-`sandbox-supervisor` service and set:
+**Option B — `.env` file in the repo root:**
+```bash
+echo "ANTHROPIC_API_KEY=sk-ant-api03-..." > .env
+docker compose up --build
+```
+
+Docker Compose automatically reads `.env` and injects the key into the
+`sandbox-supervisor` container.
+
+> **Get a key:** https://console.anthropic.com/settings/keys
+
+#### Fallback behavior
+
+By default, `ANALYSIS_FALLBACK_TO_DETERMINISTIC=false`. If the Claude adapter
+fails (e.g., missing key, rate limit), the request will return an error rather
+than silently falling back to the deterministic inspector.
+
+#### Switching to OpenAI (optional)
+
+To use the OpenAI agent adapter instead:
 
 ```bash
 export ANALYSIS_BACKEND=openai
+export OPENAI_API_KEY="sk-..."
 export OPENAI_MODEL=gpt-5.4-mini
 docker compose up --build
 ```
+
+#### Switching to deterministic (optional)
+
+For local exploration without external APIs:
+
+```bash
+export ANALYSIS_BACKEND=deterministic
+docker compose up --build
+```
+
+This runs a fast, rule-based inspector that scans text files and returns
+grounded snippets. It requires no API keys but produces simpler answers.
 
 ## Integration test
 

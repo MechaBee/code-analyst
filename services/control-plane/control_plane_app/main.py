@@ -23,7 +23,12 @@ from .config import settings
 from .object_store import ObjectStore
 from .question_orchestrator import QuestionOrchestrator
 from .sandbox_supervisor_client import SandboxSupervisorClient
-from .state_store import ConversationStateStore, RunStateStore, WorkspaceStateStore
+from .state_store import (
+    ApprovalStateStore,
+    ConversationStateStore,
+    RunStateStore,
+    WorkspaceStateStore,
+)
 from .workspace_imports import WorkspaceImportError, WorkspaceImportService
 
 app = FastAPI(title="Code Analyst Control Plane", version="0.1.0")
@@ -39,15 +44,20 @@ class AppState:
         self.workspace_store = WorkspaceStateStore(self.object_store)
         self.conversation_store = ConversationStateStore(self.object_store)
         self.run_store = RunStateStore(self.object_store)
+        self.approval_store = ApprovalStateStore(self.object_store)
         self.workspace_import_service = WorkspaceImportService(
             settings=settings,
             object_store=self.object_store,
         )
         self.question_orchestrator = QuestionOrchestrator(
-            sandbox_client=SandboxSupervisorClient(settings.sandbox_supervisor_url),
+            sandbox_client=SandboxSupervisorClient(
+                settings.sandbox_supervisor_url,
+                timeout_seconds=settings.sandbox_supervisor_timeout_seconds,
+            ),
             conversation_store=self.conversation_store,
             run_store=self.run_store,
             workspace_store=self.workspace_store,
+            approval_store=self.approval_store,
         )
 
 
@@ -135,4 +145,8 @@ async def resolve_approval(
     approval_id: str,
     request: ApprovalDecisionRequest,
 ) -> ApprovalDecisionResponse:
-    return ApprovalDecisionResponse(run_id=run_id, approval_id=approval_id)
+    return await app.state.state.question_orchestrator.resume_run_after_approval(
+        run_id=run_id,
+        decision=request.decision,
+        reason=request.reason,
+    )

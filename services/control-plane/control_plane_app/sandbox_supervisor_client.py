@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 from code_analyst_contracts import (
+    SandboxDisposeRequest,
+    SandboxDisposeResponse,
     SandboxExecutionRequest,
     SandboxExecutionResponse,
     SandboxSessionCreateRequest,
@@ -21,7 +23,7 @@ class SandboxSupervisorClient:
         base_url: str,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 280.0,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._transport = transport
@@ -49,6 +51,23 @@ class SandboxSupervisorClient:
             json=request.model_dump(mode="json"),
         )
         return SandboxExecutionResponse.model_validate(response.json())
+
+    async def dispose_session(
+        self,
+        sandbox_id: str,
+        request: SandboxDisposeRequest | None = None,
+    ) -> SandboxDisposeResponse:
+        payload = (
+            request.model_dump(mode="json")
+            if request is not None
+            else SandboxDisposeRequest().model_dump(mode="json")
+        )
+        response = await self._request(
+            "DELETE",
+            f"/v1/sandboxes/{sandbox_id}",
+            json=payload,
+        )
+        return SandboxDisposeResponse.model_validate(response.json())
 
     async def _request(
         self,

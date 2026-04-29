@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     s3_access_key_id: str = "minioadmin"
     s3_secret_access_key: str = "minioadmin"
     sandbox_supervisor_url: str = "http://localhost:8090"
+    sandbox_supervisor_timeout_seconds: float = 280.0
     workspace_tmp_dir: str = "/tmp/code-analyst/workspaces"
     s3_force_path_style: bool = True
 

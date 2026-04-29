@@ -5,6 +5,7 @@ from typing import Any
 
 from code_analyst_contracts import (
     AnswerEnvelope,
+    ApprovalState,
     ConversationCreateRequest,
     ConversationEvent,
     RunEvent,
@@ -65,6 +66,8 @@ class RunState(BaseModel):
     status: Status = Status.STARTED
     event_count: int = 0
     answer: AnswerEnvelope | None = None
+    pending_approval_id: str | None = None
+    resume_sandbox: bool = False
 
 
 class WorkspaceStateStore:
@@ -306,6 +309,7 @@ class RunStateStore:
         conversation_id: str,
         snapshot_id: str,
         message: str,
+        resume_sandbox: bool = False,
     ) -> RunState:
         state = RunState(
             run_id=run_id,
@@ -313,6 +317,7 @@ class RunStateStore:
             conversation_id=conversation_id,
             snapshot_id=snapshot_id,
             message=message,
+            resume_sandbox=resume_sandbox,
         )
         self._write_state(state)
         self._object_store.upload_json(
@@ -413,3 +418,59 @@ class RunStateStore:
 
     def _run_event_key(self, *, tenant_id: str, run_id: str, sequence: int) -> str:
         return f"tenants/{tenant_id}/runs/{run_id}/events/{sequence:06d}.json"
+
+
+class ApprovalStateStore:
+    def __init__(self, object_store: ObjectStore) -> None:
+        self._object_store = object_store
+
+    def create_approval(
+        self,
+        *,
+        approval_id: str,
+        run_id: str,
+    ) -> ApprovalState:
+        state = ApprovalState(
+            approval_id=approval_id,
+            run_id=run_id,
+        )
+        self._write_state(state)
+        return state
+
+    def get_approval(self, approval_id: str) -> ApprovalState | None:
+        try:
+            payload = self._object_store.download_json(
+                self._approval_state_key(approval_id)
+            )
+        except ObjectStoreKeyNotFound:
+            return None
+        return ApprovalState.model_validate(payload)
+
+    def resolve_approval(
+        self,
+        approval_id: str,
+        *,
+        decision: str,
+        reason: str | None = None,
+    ) -> ApprovalState:
+        state = self.get_approval(approval_id)
+        if state is None:
+            raise KeyError(f"Approval {approval_id} not found")
+        updated = state.model_copy(
+            update={
+                "decision": decision,
+                "reason": reason,
+                "resolved_at": utc_now(),
+            }
+        )
+        self._write_state(updated)
+        return updated
+
+    def _write_state(self, state: ApprovalState) -> None:
+        self._object_store.upload_json(
+            self._approval_state_key(state.approval_id),
+            state.model_dump(mode="json"),
+        )
+
+    def _approval_state_key(self, approval_id: str) -> str:
+        return f"indices/approvals/{approval_id}.json"
