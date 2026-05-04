@@ -43,6 +43,38 @@ class WorkspaceImportService:
         self,
         request: WorkspaceImportRequest,
     ) -> WorkspaceImportArtifacts:
+        """Legacy raw-repo import (creates workspace without checkout record)."""
+        return self._import_core(
+            tenant_id=request.tenant_id,
+            repo_url=request.repo_url,
+            ref=request.ref,
+            github_credential_ref=request.github_credential_ref,
+        )
+
+    def import_from_repo_definition(
+        self,
+        *,
+        tenant_id: str,
+        repo_def_id: str,
+        ref: str,
+        endpoint: str,
+        credential_ref: str,
+    ) -> WorkspaceImportArtifacts:
+        """Import from a repository definition. Returns workspace artifacts."""
+        return self._import_core(
+            tenant_id=tenant_id,
+            repo_url=endpoint,
+            ref=ref,
+            github_credential_ref=credential_ref,
+        )
+
+    def _import_core(
+        self,
+        tenant_id: str,
+        repo_url: str,
+        ref: str,
+        github_credential_ref: str,
+    ) -> WorkspaceImportArtifacts:
         workspace_id = self._new_id("ws")
         snapshot_id = self._new_id("snap")
         base_tmp_dir = Path(self._settings.workspace_tmp_dir)
@@ -57,15 +89,15 @@ class WorkspaceImportService:
             archive_path = temp_path / "repo.tar.zst"
 
             self._clone_repository(
-                repo_url=request.repo_url,
-                ref=request.ref,
-                github_credential_ref=request.github_credential_ref,
+                repo_url=repo_url,
+                ref=ref,
+                github_credential_ref=github_credential_ref,
                 target_dir=repo_dir,
             )
             commit_sha = self._resolve_commit_sha(repo_dir)
             archive_object_key, manifest_object_key, metadata_object_key = (
                 self._build_object_keys(
-                    tenant_id=request.tenant_id,
+                    tenant_id=tenant_id,
                     workspace_id=workspace_id,
                     snapshot_id=snapshot_id,
                 )
@@ -74,21 +106,22 @@ class WorkspaceImportService:
             snapshot_ref = WorkspaceSnapshotRef(
                 workspace_id=workspace_id,
                 snapshot_id=snapshot_id,
-                repo_url=request.repo_url,
-                ref=request.ref,
+                repo_url=repo_url,
+                ref=ref,
                 commit_sha=commit_sha,
                 archive_object_key=archive_object_key,
                 manifest_object_key=manifest_object_key,
                 metadata_object_key=metadata_object_key,
             )
             manifest = self._build_manifest(
-                tenant_id=request.tenant_id,
+                tenant_id=tenant_id,
                 snapshot=snapshot_ref,
                 repo_dir=repo_dir,
             )
             self._create_archive(repo_dir=repo_dir, archive_path=archive_path)
             self._upload_snapshot(
-                request=request,
+                tenant_id=tenant_id,
+                github_credential_ref=github_credential_ref,
                 snapshot=snapshot_ref,
                 manifest=manifest,
                 archive_path=archive_path,
@@ -158,7 +191,9 @@ class WorkspaceImportService:
 
     def _upload_snapshot(
         self,
-        request: WorkspaceImportRequest,
+        *,
+        tenant_id: str,
+        github_credential_ref: str,
         snapshot: WorkspaceSnapshotRef,
         manifest: SnapshotManifest,
         archive_path: Path,
@@ -173,8 +208,8 @@ class WorkspaceImportService:
             payload=manifest.model_dump(mode="json"),
         )
         metadata = {
-            "tenant_id": request.tenant_id,
-            "github_credential_ref": request.github_credential_ref,
+            "tenant_id": tenant_id,
+            "github_credential_ref": github_credential_ref,
             "snapshot": snapshot.model_dump(mode="json"),
         }
         if snapshot.metadata_object_key is None:

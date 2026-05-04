@@ -1,22 +1,55 @@
+import { useMemo } from 'react';
+
 import type {
-  WorkspaceImportRequest,
-  WorkspaceImportResponse,
-  ConversationCreateRequest,
-  ConversationCreateResponse,
-  QuestionRequest,
-  QuestionResponse,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
+  Checkout,
+  CheckoutCreateRequest,
+  CheckoutCreateResponse,
+  CheckoutListResponse,
+  ConversationCreateRequest,
+  ConversationCreateResponse,
+  ConversationEvent,
+  ConversationHead,
+  ConversationListResponse,
   HealthResponse,
+  QuestionRequest,
+  QuestionResponse,
+  RepositoryDefinition,
+  RepositoryDefinitionCreateRequest,
+  RepositoryDefinitionCreateResponse,
+  RepositoryDefinitionListResponse,
+  RepositoryDefinitionUpdateTeamsRequest,
+  RepositoryDefinitionUpdateTeamsResponse,
+  TeamCreateRequest,
+  TeamCreateResponse,
+  TeamListResponse,
+  TeamMemberAddRequest,
+  TeamMemberAddResponse,
+  TeamMemberRemoveResponse,
+  UserCreateRequest,
+  UserCreateResponse,
+  UserMeResponse,
+  WorkspaceImportRequest,
+  WorkspaceImportResponse,
 } from '@/types/api';
 
 const API_BASE = '/api';
 
+function getAuthHeaders(): Record<string, string> {
+  // In local mode, read from env or static config
+  const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'tenant_local';
+  const userEmail = process.env.NEXT_PUBLIC_USER_EMAIL || 'user@tenant.local';
+  return {
+    'Content-Type': 'application/json',
+    'X-Tenant-Id': tenantId,
+    'X-User-Email': userEmail,
+  };
+}
+
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: getAuthHeaders(),
     ...options,
   });
   if (!res.ok) {
@@ -27,27 +60,97 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export function useApi() {
-  return {
-    health: () => apiFetch<HealthResponse>('/health'),
-    importWorkspace: (req: WorkspaceImportRequest) =>
-      apiFetch<WorkspaceImportResponse>('/v1/workspaces/imports/github', {
-        method: 'POST',
-        body: JSON.stringify(req),
-      }),
-    createConversation: (req: ConversationCreateRequest) =>
-      apiFetch<ConversationCreateResponse>('/v1/conversations', {
-        method: 'POST',
-        body: JSON.stringify(req),
-      }),
-    askQuestion: (conversationId: string, req: QuestionRequest) =>
-      apiFetch<QuestionResponse>(`/v1/conversations/${conversationId}/questions`, {
-        method: 'POST',
-        body: JSON.stringify(req),
-      }),
-    resolveApproval: (runId: string, approvalId: string, req: ApprovalDecisionRequest) =>
-      apiFetch<ApprovalDecisionResponse>(`/v1/runs/${runId}/approvals/${approvalId}`, {
-        method: 'POST',
-        body: JSON.stringify(req),
-      }),
-  };
+  return useMemo(
+    () => ({
+      // Health
+      health: () => apiFetch<HealthResponse>('/health'),
+
+      // Legacy workspace import
+      importWorkspace: (req: WorkspaceImportRequest) =>
+        apiFetch<WorkspaceImportResponse>('/v1/workspaces/imports/github', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+
+      // Conversations
+      createConversation: (req: ConversationCreateRequest) =>
+        apiFetch<ConversationCreateResponse>('/v1/conversations', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      listConversations: (repoDefId?: string) =>
+        apiFetch<ConversationListResponse>(
+          repoDefId ? `/v1/conversations?repo_def_id=${repoDefId}` : '/v1/conversations'
+        ),
+      getConversation: (conversationId: string) =>
+        apiFetch<ConversationHead>(`/v1/conversations/${conversationId}`),
+      listConversationEvents: (conversationId: string) =>
+        apiFetch<ConversationEvent[]>(`/v1/conversations/${conversationId}/events`),
+      askQuestion: (conversationId: string, req: QuestionRequest) =>
+        apiFetch<QuestionResponse>(`/v1/conversations/${conversationId}/questions`, {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+
+      // Approvals
+      resolveApproval: (runId: string, approvalId: string, req: ApprovalDecisionRequest) =>
+        apiFetch<ApprovalDecisionResponse>(`/v1/runs/${runId}/approvals/${approvalId}`, {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+
+      // Phase 1: Identity
+      me: () => apiFetch<UserMeResponse>('/v1/users/me'),
+      createUser: (req: UserCreateRequest) =>
+        apiFetch<UserCreateResponse>('/v1/users', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+
+      // Phase 1: Teams
+      createTeam: (req: TeamCreateRequest) =>
+        apiFetch<TeamCreateResponse>('/v1/teams', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      listTeams: () => apiFetch<TeamListResponse>('/v1/teams'),
+      addTeamMember: (teamId: string, req: TeamMemberAddRequest) =>
+        apiFetch<TeamMemberAddResponse>(`/v1/teams/${teamId}/members`, {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      removeTeamMember: (teamId: string, userEmail: string) =>
+        apiFetch<TeamMemberRemoveResponse>(`/v1/teams/${teamId}/members/${userEmail}`, {
+          method: 'DELETE',
+        }),
+
+      // Phase 1: Repository Definitions
+      createRepoDefinition: (req: RepositoryDefinitionCreateRequest) =>
+        apiFetch<RepositoryDefinitionCreateResponse>('/v1/repos', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      listRepoDefinitions: () =>
+        apiFetch<RepositoryDefinitionListResponse>('/v1/repos'),
+      getRepoDefinition: (repoDefId: string) =>
+        apiFetch<RepositoryDefinition>(`/v1/repos/${repoDefId}`),
+      updateRepoDefinitionTeams: (repoDefId: string, req: RepositoryDefinitionUpdateTeamsRequest) =>
+        apiFetch<RepositoryDefinitionUpdateTeamsResponse>(`/v1/repos/${repoDefId}/teams`, {
+          method: 'PATCH',
+          body: JSON.stringify(req),
+        }),
+
+      // Phase 2: Checkouts
+      createCheckout: (repoDefId: string, req: CheckoutCreateRequest) =>
+        apiFetch<CheckoutCreateResponse>(`/v1/repos/${repoDefId}/checkouts`, {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      listCheckoutsForRepo: (repoDefId: string) =>
+        apiFetch<CheckoutListResponse>(`/v1/repos/${repoDefId}/checkouts`),
+      getCheckout: (checkoutId: string) =>
+        apiFetch<Checkout>(`/v1/checkouts/${checkoutId}`),
+    }),
+    []
+  );
 }

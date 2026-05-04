@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from code_analyst_contracts import (
     ApprovalDecisionResponse,
     ApprovalState,
+    Checkout,
     QuestionRequest,
     QuestionResponse,
     RunEvent,
@@ -30,8 +32,15 @@ from .state_store import (
     WorkspaceStateStore,
 )
 
+
+# Avoid circular import at import time; app_state_store is injected via __init__
+
+
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:12]}"
+
+
+logger = logging.getLogger(__name__)
 
 
 class QuestionOrchestrator:
@@ -43,12 +52,14 @@ class QuestionOrchestrator:
         run_store: RunStateStore,
         workspace_store: WorkspaceStateStore,
         approval_store: ApprovalStateStore,
+        app_state_store: "AppStateStore",
     ) -> None:
         self._sandbox_client = sandbox_client
         self._conversation_store = conversation_store
         self._run_store = run_store
         self._workspace_store = workspace_store
         self._approval_store = approval_store
+        self._app_state_store = app_state_store
 
     async def execute_question(
         self,
@@ -137,24 +148,24 @@ class QuestionOrchestrator:
         if conversation is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
-        snapshot = self._workspace_store.get_snapshot(
-            tenant_id=run_state.tenant_id,
-            workspace_id=conversation.workspace_id,
-            snapshot_id=run_state.snapshot_id,
+        snapshot = self._resolve_snapshot(
+            conversation=conversation,
+            request=QuestionRequest(
+                message=run_state.message,
+                resume_sandbox=run_state.resume_sandbox,
+            ),
         )
         if snapshot is None:
             raise HTTPException(status_code=404, detail="Workspace snapshot not found")
-
-        request = QuestionRequest(
-            message=run_state.message,
-            resume_sandbox=run_state.resume_sandbox,
-        )
 
         await self._execute_run_body(
             run_id=run_id,
             conversation=conversation,
             snapshot=snapshot,
-            request=request,
+            request=QuestionRequest(
+                message=run_state.message,
+                resume_sandbox=run_state.resume_sandbox,
+            ),
         )
 
         updated_run = self._run_store.get_run(run_id)
@@ -176,8 +187,7 @@ class QuestionOrchestrator:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
         snapshot = self._resolve_snapshot(
-            tenant_id=conversation.tenant_id,
-            workspace_id=conversation.workspace_id,
+            conversation=conversation,
             request=request,
         )
 
@@ -266,6 +276,7 @@ class QuestionOrchestrator:
         )
 
         session = None
+        stage = "create_session"
         try:
             session = await self._sandbox_client.create_session(
                 request=SandboxSessionCreateRequest(
@@ -288,6 +299,7 @@ class QuestionOrchestrator:
                 },
             )
 
+            stage = "execute_session"
             execution_response = await self._sandbox_client.execute_session(
                 sandbox_id=session.sandbox_id,
                 request=SandboxExecutionRequest(
@@ -302,6 +314,14 @@ class QuestionOrchestrator:
                 ),
             )
         except SandboxSupervisorClientError as error:
+            logger.exception(
+                "Sandbox interaction failed: run_id=%s conversation_id=%s snapshot_id=%s sandbox_id=%s stage=%s",
+                run_id,
+                conversation.conversation_id,
+                snapshot.snapshot_id,
+                session.sandbox_id if session is not None else None,
+                stage,
+            )
             self._append_run_event(
                 run_id=run_id,
                 event_type=RunEventType.RUN_FAILED,
@@ -319,42 +339,94 @@ class QuestionOrchestrator:
                 except SandboxSupervisorClientError:
                     pass
 
-        for citation in execution_response.answer.citations:
+        try:
+            stage = "persist_answer"
+            for citation in execution_response.answer.citations:
+                self._append_run_event(
+                    run_id=run_id,
+                    event_type=RunEventType.CITATION_CREATED,
+                    payload=citation.model_dump(mode="json"),
+                )
             self._append_run_event(
                 run_id=run_id,
-                event_type=RunEventType.CITATION_CREATED,
-                payload=citation.model_dump(mode="json"),
+                event_type=RunEventType.RUN_COMPLETED,
+                payload=execution_response.answer.model_dump(mode="json"),
             )
-        self._append_run_event(
-            run_id=run_id,
-            event_type=RunEventType.RUN_COMPLETED,
-            payload=execution_response.answer.model_dump(mode="json"),
-        )
-        self._run_store.update_run(
-            run_id,
-            answer=execution_response.answer,
-            sandbox_id=session.sandbox_id,
-            status=Status.COMPLETED,
-            pending_approval_id=None,
-        )
-        self._conversation_store.append_event(
-            conversation_id=conversation.conversation_id,
-            event_type="assistant.message.created",
-            run_id=run_id,
-            payload=execution_response.answer.model_dump(mode="json"),
-        )
+            self._run_store.update_run(
+                run_id,
+                answer=execution_response.answer,
+                sandbox_id=session.sandbox_id,
+                status=Status.COMPLETED,
+                pending_approval_id=None,
+            )
+            self._conversation_store.append_event(
+                conversation_id=conversation.conversation_id,
+                event_type="assistant.message.created",
+                run_id=run_id,
+                payload=execution_response.answer.model_dump(mode="json"),
+            )
+        except Exception as error:
+            logger.exception(
+                "Question run post-processing failed: run_id=%s conversation_id=%s snapshot_id=%s sandbox_id=%s stage=%s citation_count=%s followup_count=%s",
+                run_id,
+                conversation.conversation_id,
+                snapshot.snapshot_id,
+                session.sandbox_id if session is not None else None,
+                stage,
+                len(execution_response.answer.citations),
+                len(execution_response.answer.followups),
+            )
+            try:
+                self._append_run_event(
+                    run_id=run_id,
+                    event_type=RunEventType.RUN_FAILED,
+                    payload={"message": f"Post-processing failed: {error}"},
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to record run failure event: run_id=%s conversation_id=%s",
+                    run_id,
+                    conversation.conversation_id,
+                )
+            try:
+                self._run_store.update_run(run_id, status=Status.FAILED)
+            except Exception:
+                logger.exception(
+                    "Failed to mark run as failed after post-processing error: run_id=%s conversation_id=%s",
+                    run_id,
+                    conversation.conversation_id,
+                )
+            raise
 
     def _resolve_snapshot(
         self,
         *,
-        tenant_id: str,
-        workspace_id: str,
+        conversation: ConversationHead,
         request: QuestionRequest,
     ) -> WorkspaceSnapshotRef:
+        if conversation.checkout_id:
+            checkout = self._app_state_store.get_checkout(
+                conversation.tenant_id, conversation.checkout_id
+            )
+            if checkout is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Checkout not found for conversation",
+                )
+            snapshot_id = request.workspace_snapshot_id or checkout.snapshot_id
+            snapshot = self._workspace_store.get_snapshot(
+                tenant_id=conversation.tenant_id,
+                workspace_id=checkout.workspace_id,
+                snapshot_id=snapshot_id,
+            )
+            if snapshot is None:
+                raise HTTPException(status_code=404, detail="Workspace snapshot not found")
+            return snapshot
+
         if request.workspace_snapshot_id:
             snapshot = self._workspace_store.get_snapshot(
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
+                tenant_id=conversation.tenant_id,
+                workspace_id=conversation.workspace_id,
                 snapshot_id=request.workspace_snapshot_id,
             )
             if snapshot is None:
@@ -362,8 +434,8 @@ class QuestionOrchestrator:
             return snapshot
 
         snapshot = self._workspace_store.get_latest_snapshot(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
+            tenant_id=conversation.tenant_id,
+            workspace_id=conversation.workspace_id,
         )
         if snapshot is None:
             raise HTTPException(

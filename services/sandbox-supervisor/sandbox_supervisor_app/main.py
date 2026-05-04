@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from code_analyst_contracts import (
@@ -23,6 +24,7 @@ from .workspace_materializer import (
 )
 
 app = FastAPI(title="Code Analyst Sandbox Supervisor", version="0.1.0")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -62,8 +64,20 @@ async def create_session(
             request,
         )
     except WorkspaceMaterializationError as error:
+        logger.exception(
+            "Workspace materialization failed: workspace_id=%s snapshot_id=%s resume_from_sandbox_id=%s",
+            request.workspace.workspace_id,
+            request.workspace.snapshot_id,
+            request.resume_from_sandbox_id,
+        )
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
+        logger.exception(
+            "Sandbox session creation failed: workspace_id=%s snapshot_id=%s resume_from_sandbox_id=%s",
+            request.workspace.workspace_id,
+            request.workspace.snapshot_id,
+            request.resume_from_sandbox_id,
+        )
         raise HTTPException(
             status_code=502,
             detail="Sandbox session creation failed during workspace materialization.",
@@ -100,9 +114,15 @@ async def execute_session(
             top_level_entries=record.top_level_entries,
         )
     except Exception as error:
+        logger.exception(
+            "Sandbox analysis failed: sandbox_id=%s workspace_root=%s snapshot_id=%s",
+            sandbox_id,
+            record.workspace_root,
+            record.session.snapshot_id,
+        )
         raise HTTPException(
             status_code=502,
-            detail="Sandbox execution failed during analysis.",
+            detail=f"Sandbox execution failed during analysis: {error}",
         ) from error
 
     return SandboxExecutionResponse(

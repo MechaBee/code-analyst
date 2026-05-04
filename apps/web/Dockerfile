@@ -15,7 +15,7 @@ RUN pnpm install --frozen-lockfile || pnpm install
 
 # Copy source
 COPY apps/web/tsconfig.json ./
-COPY apps/web/next.config.ts ./
+COPY apps/web/next.config.mjs ./
 COPY apps/web/tailwind.config.ts ./
 COPY apps/web/postcss.config.mjs ./
 COPY apps/web/next-env.d.ts ./
@@ -23,7 +23,7 @@ COPY apps/web/src ./src
 COPY apps/web/server ./server
 COPY apps/web/server/tsconfig.json ./server/tsconfig.json
 
-# Build Next.js static export
+# Build the Next.js app
 RUN pnpm build
 
 # --- Production stage ---
@@ -42,10 +42,9 @@ COPY apps/web/package.json ./
 COPY apps/web/pnpm-lock.yaml ./
 RUN pnpm install --prod --frozen-lockfile || pnpm install --prod
 
-# Copy built assets and server
+# Copy built assets and runtime config
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/server ./server
-COPY --from=builder /app/server/tsconfig.json ./server/tsconfig.json
+COPY --from=builder /app/next.config.mjs ./next.config.mjs
 
 EXPOSE 3000
 

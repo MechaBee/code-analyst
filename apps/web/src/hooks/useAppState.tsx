@@ -8,6 +8,9 @@ export interface AppState {
   workspaceId: string | null;
   snapshotId: string | null;
   conversationId: string | null;
+  repoDefId: string | null;
+  checkoutId: string | null;
+  principalEmail: string | null;
   messages: Message[];
   pendingApproval: { runId: string; approvalId: string; message: string } | null;
   isLoading: boolean;
@@ -18,7 +21,9 @@ export interface AppState {
 interface AppStateContextValue extends AppState {
   setView: (view: View) => void;
   setWorkspace: (workspaceId: string, snapshotId: string) => void;
+  setConversationContext: (id: string, repoDefId?: string, checkoutId?: string) => void;
   setConversationId: (id: string | null) => void;
+  replaceMessages: (messages: Message[]) => void;
   addMessage: (message: Message) => void;
   updateLastAssistantMessage: (updater: (msg: Message) => Message) => void;
   appendToLastAssistant: (text: string) => void;
@@ -37,6 +42,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [snapshotId, setSnapshotId] = useState<string | null>(null);
   const [conversationId, setConversationIdState] = useState<string | null>(null);
+  const [repoDefId, setRepoDefId] = useState<string | null>(null);
+  const [checkoutId, setCheckoutId] = useState<string | null>(null);
+  const [principalEmail, setPrincipalEmail] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [pendingApproval, setPendingApprovalState] = useState<AppState['pendingApproval']>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -48,8 +56,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setSnapshotId(sid);
   }, []);
 
+  const setConversationContext = useCallback((id: string, r?: string, c?: string) => {
+    setConversationIdState(id);
+    if (r !== undefined) setRepoDefId(r);
+    if (c !== undefined) setCheckoutId(c);
+  }, []);
+
   const setConversationId = useCallback((id: string | null) => {
     setConversationIdState(id);
+  }, []);
+
+  const replaceMessages = useCallback((nextMessages: Message[]) => {
+    setMessages(nextMessages);
   }, []);
 
   const addMessage = useCallback((message: Message) => {
@@ -100,6 +118,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         workspaceId,
         snapshotId,
         conversationId,
+        repoDefId,
+        checkoutId,
+        principalEmail,
         messages,
         pendingApproval,
         isLoading,
@@ -107,7 +128,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         chatError,
         setView,
         setWorkspace,
+        setConversationContext,
         setConversationId,
+        replaceMessages,
         addMessage,
         updateLastAssistantMessage,
         appendToLastAssistant,

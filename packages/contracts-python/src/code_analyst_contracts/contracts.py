@@ -62,7 +62,9 @@ class WorkspaceImportResponse(BaseModel):
 
 class ConversationCreateRequest(BaseModel):
     tenant_id: str
-    workspace_id: str
+    repo_def_id: str
+    checkout_id: str | None = None
+    workspace_id: str | None = None
     title: str | None = None
 
 
@@ -199,6 +201,194 @@ class SandboxDisposeRequest(BaseModel):
 class SandboxDisposeResponse(BaseModel):
     sandbox_id: str
     status: Status = Status.DISPOSED
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Identity, Team, and Repository Definition models
+# ---------------------------------------------------------------------------
+
+class RepositoryAdapter(BaseModel):
+    kind: str  # "github" | "gitlab" (future)
+    credential_ref: str  # "public" | "env:VAR_NAME"
+
+
+class RepositoryDefinition(BaseModel):
+    tenant_id: str
+    repo_def_id: str
+    name: str | None = None
+    endpoint: str  # e.g. https://github.com/acme/example.git
+    adapter: RepositoryAdapter
+    team_ids: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class User(BaseModel):
+    tenant_id: str
+    email: str  # globally unique within tenant, acts as user id
+    name: str | None = None
+    is_admin: bool = False
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class Team(BaseModel):
+    tenant_id: str
+    team_id: str
+    name: str
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class TeamMembership(BaseModel):
+    tenant_id: str
+    team_id: str
+    user_email: str
+    joined_at: datetime = Field(default_factory=utc_now)
+
+
+# ---------------------------------------------------------------------------
+# Request / Response helpers for new endpoints
+# ---------------------------------------------------------------------------
+
+class TeamCreateRequest(BaseModel):
+    name: str
+
+
+class TeamCreateResponse(BaseModel):
+    team_id: str
+    tenant_id: str
+    name: str
+    created_at: datetime
+
+
+class TeamListResponse(BaseModel):
+    tenant_id: str
+    teams: list[Team]
+
+
+class TeamMemberAddRequest(BaseModel):
+    user_email: str
+
+
+class TeamMemberAddResponse(BaseModel):
+    team_id: str
+    user_email: str
+    joined_at: datetime
+
+
+class TeamMemberRemoveResponse(BaseModel):
+    team_id: str
+    user_email: str
+
+
+class UserCreateRequest(BaseModel):
+    email: str
+    name: str | None = None
+    is_admin: bool = False
+
+
+class UserCreateResponse(BaseModel):
+    tenant_id: str
+    email: str
+    name: str | None = None
+    is_admin: bool = False
+    created_at: datetime
+
+
+class UserMeResponse(BaseModel):
+    tenant_id: str
+    email: str
+    name: str | None = None
+    is_admin: bool = False
+
+
+class RepositoryDefinitionCreateRequest(BaseModel):
+    name: str | None = None
+    endpoint: str
+    adapter: RepositoryAdapter
+    team_ids: list[str] = Field(default_factory=list)
+
+
+class RepositoryDefinitionCreateResponse(BaseModel):
+    tenant_id: str
+    repo_def_id: str
+    name: str | None = None
+    endpoint: str
+    adapter: RepositoryAdapter
+    team_ids: list[str]
+    created_at: datetime
+
+
+class RepositoryDefinitionListResponse(BaseModel):
+    tenant_id: str
+    repo_definitions: list[RepositoryDefinition]
+
+
+class RepositoryDefinitionUpdateTeamsRequest(BaseModel):
+    team_ids: list[str]
+
+
+class RepositoryDefinitionUpdateTeamsResponse(BaseModel):
+    tenant_id: str
+    repo_def_id: str
+    team_ids: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Checkout entity
+# ---------------------------------------------------------------------------
+
+class Checkout(BaseModel):
+    tenant_id: str
+    checkout_id: str
+    repo_def_id: str
+    branch: str
+    commit_sha: str
+    run_timestamp: datetime = Field(default_factory=utc_now)
+    workspace_id: str
+    snapshot_id: str
+    archived: bool = False
+
+
+class CheckoutCreateRequest(BaseModel):
+    repo_def_id: str
+    ref: str = "main"
+
+
+class CheckoutCreateResponse(BaseModel):
+    tenant_id: str
+    checkout_id: str
+    repo_def_id: str
+    branch: str
+    commit_sha: str
+    run_timestamp: datetime
+    workspace_id: str
+    snapshot_id: str
+
+
+class CheckoutListResponse(BaseModel):
+    tenant_id: str
+    checkouts: list[Checkout]
+
+
+class ConversationHead(BaseModel):
+    conversation_id: str
+    tenant_id: str
+    workspace_id: str
+    repo_def_id: str | None = None
+    checkout_id: str | None = None
+    principal_email: str
+    title: str | None = None
+    status: str = "OPEN"
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    last_event_sequence: int = 0
+    latest_run_id: str | None = None
+    active_sandbox_id: str | None = None
+    latest_snapshot_id: str | None = None
+
+
+class ConversationListResponse(BaseModel):
+    tenant_id: str
+    conversations: list[ConversationHead]
 
 
 class ConversationEvent(BaseModel):

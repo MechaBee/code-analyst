@@ -1,20 +1,23 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useAppState } from '@/hooks/useAppState';
 import { useApi } from '@/hooks/useApi';
 import { cn } from '@/lib/utils';
 
 export default function WorkspaceImport() {
-  const { setView, setWorkspace, setConversationId, setImportError, importError } = useAppState();
   const api = useApi();
   const [url, setUrl] = useState('');
   const [ref, setRef] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<{ workspaceId: string; snapshotId: string } | null>(null);
 
   const handleImport = async (e: React.FormEvent) => {
     e.preventDefault();
-    setImportError(null);
+    setError(null);
+    setNotice(null);
+    setImportResult(null);
     setLoading(true);
 
     try {
@@ -24,19 +27,15 @@ export default function WorkspaceImport() {
         ref: ref.trim(),
         github_credential_ref: 'public',
       });
-
-      setWorkspace(importRes.workspace_id, importRes.snapshot_id);
-
-      const convRes = await api.createConversation({
-        tenant_id: 'tenant_local',
-        workspace_id: importRes.workspace_id,
-        title: 'New Analysis',
+      setImportResult({
+        workspaceId: importRes.workspace_id,
+        snapshotId: importRes.snapshot_id,
       });
-
-      setConversationId(convRes.conversation_id);
-      setView('chat');
+      setNotice(
+        'Raw workspace import still works, but starting a conversation now requires a repository definition and checkout. Use the dashboard repository flow next.'
+      );
     } catch (err) {
-      setImportError(err instanceof Error ? err.message : 'Import failed');
+      setError(err instanceof Error ? err.message : 'Import failed');
     } finally {
       setLoading(false);
     }
@@ -65,7 +64,7 @@ export default function WorkspaceImport() {
               className={cn(
                 'w-full rounded-lg border bg-cream px-3 py-2 text-sm text-ink outline-none transition',
                 'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
-                importError ? 'border-red-400' : 'border-line'
+                error ? 'border-red-400' : 'border-line'
               )}
             />
           </div>
@@ -83,7 +82,7 @@ export default function WorkspaceImport() {
               className={cn(
                 'w-full rounded-lg border bg-cream px-3 py-2 text-sm text-ink outline-none transition',
                 'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
-                importError ? 'border-red-400' : 'border-line'
+                error ? 'border-red-400' : 'border-line'
               )}
             />
             <p className="mt-1 text-xs text-muted">
@@ -91,9 +90,26 @@ export default function WorkspaceImport() {
             </p>
           </div>
 
-          {importError && (
+          {error && (
             <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
-              {importError}
+              {error}
+            </div>
+          )}
+
+          {notice && (
+            <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {notice}
+            </div>
+          )}
+
+          {importResult && (
+            <div className="rounded-lg border border-line bg-cream px-3 py-2 text-sm text-ink">
+              <div>
+                Workspace: <span className="font-mono">{importResult.workspaceId}</span>
+              </div>
+              <div>
+                Snapshot: <span className="font-mono">{importResult.snapshotId}</span>
+              </div>
             </div>
           )}
 

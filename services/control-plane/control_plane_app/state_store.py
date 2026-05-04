@@ -6,8 +6,10 @@ from typing import Any
 from code_analyst_contracts import (
     AnswerEnvelope,
     ApprovalState,
+    Checkout,
     ConversationCreateRequest,
     ConversationEvent,
+    ConversationHead,
     RunEvent,
     RunEventType,
     Status,
@@ -32,23 +34,14 @@ class WorkspaceHead(BaseModel):
 class ConversationIndexEntry(BaseModel):
     conversation_id: str
     tenant_id: str
+    principal_email: str
+    repo_def_id: str | None
 
 
 class RunIndexEntry(BaseModel):
     run_id: str
     tenant_id: str
     conversation_id: str
-
-
-class ConversationHead(BaseModel):
-    conversation_id: str
-    tenant_id: str
-    workspace_id: str
-    title: str | None = None
-    status: str = "OPEN"
-    created_at: datetime = Field(default_factory=utc_now)
-    updated_at: datetime = Field(default_factory=utc_now)
-    last_event_sequence: int = 0
     latest_run_id: str | None = None
     active_sandbox_id: str | None = None
     latest_snapshot_id: str | None = None
@@ -156,11 +149,16 @@ class ConversationStateStore:
         *,
         conversation_id: str,
         request: ConversationCreateRequest,
+        principal_email: str,
+        workspace_id: str,
     ) -> ConversationHead:
         head = ConversationHead(
             conversation_id=conversation_id,
             tenant_id=request.tenant_id,
-            workspace_id=request.workspace_id,
+            repo_def_id=request.repo_def_id,
+            checkout_id=request.checkout_id,
+            principal_email=principal_email,
+            workspace_id=workspace_id,
             title=request.title,
         )
         self._write_head(head)
@@ -169,6 +167,8 @@ class ConversationStateStore:
             ConversationIndexEntry(
                 conversation_id=conversation_id,
                 tenant_id=request.tenant_id,
+                principal_email=principal_email,
+                repo_def_id=request.repo_def_id,
             ).model_dump(mode="json"),
         )
         return head
@@ -181,12 +181,34 @@ class ConversationStateStore:
             payload = self._object_store.download_json(
                 self._conversation_head_key(
                     tenant_id=index.tenant_id,
+                    principal_email=index.principal_email,
+                    repo_def_id=index.repo_def_id,
                     conversation_id=conversation_id,
                 )
             )
         except ObjectStoreKeyNotFound:
             return None
         return ConversationHead.model_validate(payload)
+
+    def list_conversations(
+        self,
+        *,
+        tenant_id: str,
+        principal_email: str,
+        repo_def_id: str | None = None,
+    ) -> list[ConversationHead]:
+        prefix = self._conversation_scope_prefix(
+            tenant_id=tenant_id,
+            principal_email=principal_email,
+            repo_def_id=repo_def_id,
+        )
+        # list_keys returns the full S3 keys, we need to find head.json files
+        keys = [k for k in self._object_store.list_keys(prefix) if k.endswith("/head.json")]
+        heads: list[ConversationHead] = []
+        for key in keys:
+            payload = self._object_store.download_json(key)
+            heads.append(ConversationHead.model_validate(payload))
+        return sorted(heads, key=lambda h: h.updated_at, reverse=True)
 
     def append_event(
         self,
@@ -212,6 +234,8 @@ class ConversationStateStore:
         self._object_store.upload_json(
             self._conversation_event_key(
                 tenant_id=head.tenant_id,
+                principal_email=head.principal_email,
+                repo_def_id=head.repo_def_id,
                 conversation_id=conversation_id,
                 sequence=sequence,
             ),
@@ -248,7 +272,8 @@ class ConversationStateStore:
         if head is None:
             return []
         prefix = (
-            f"tenants/{head.tenant_id}/conversations/{conversation_id}/events/"
+            f"tenants/{head.tenant_id}/conversations/{head.principal_email}/"
+            f"{head.repo_def_id}/{conversation_id}/events/"
         )
         keys = sorted(self._object_store.list_keys(prefix))
         events: list[ConversationEvent] = []
@@ -273,6 +298,8 @@ class ConversationStateStore:
         self._object_store.upload_json(
             self._conversation_head_key(
                 tenant_id=head.tenant_id,
+                principal_email=head.principal_email,
+                repo_def_id=head.repo_def_id,
                 conversation_id=head.conversation_id,
             ),
             head.model_dump(mode="json"),
@@ -281,20 +308,49 @@ class ConversationStateStore:
     def _conversation_index_key(self, conversation_id: str) -> str:
         return f"indices/conversations/{conversation_id}.json"
 
-    def _conversation_head_key(self, *, tenant_id: str, conversation_id: str) -> str:
-        return f"tenants/{tenant_id}/conversations/{conversation_id}/head.json"
+    def _conversation_head_key(
+        self,
+        *,
+        tenant_id: str,
+        principal_email: str,
+        repo_def_id: str | None,
+        conversation_id: str,
+    ) -> str:
+        r = repo_def_id if repo_def_id else "__none__"
+        return (
+            f"tenants/{tenant_id}/conversations/{principal_email}/"
+            f"{r}/{conversation_id}/head.json"
+        )
 
     def _conversation_event_key(
         self,
         *,
         tenant_id: str,
+        principal_email: str,
+        repo_def_id: str | None,
         conversation_id: str,
         sequence: int,
     ) -> str:
+        r = repo_def_id if repo_def_id else "__none__"
         return (
-            f"tenants/{tenant_id}/conversations/{conversation_id}/events/"
-            f"{sequence:06d}.json"
+            f"tenants/{tenant_id}/conversations/{principal_email}/"
+            f"{r}/{conversation_id}/events/{sequence:06d}.json"
         )
+
+    def _conversation_scope_prefix(
+        self,
+        *,
+        tenant_id: str,
+        principal_email: str,
+        repo_def_id: str | None = None,
+    ) -> str:
+        if repo_def_id:
+            return (
+                f"tenants/{tenant_id}/conversations/{principal_email}/"
+                f"{repo_def_id}/"
+            )
+        prefix = f"tenants/{tenant_id}/conversations/{principal_email}/"
+        return prefix
 
 
 class RunStateStore:

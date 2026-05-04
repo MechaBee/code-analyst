@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from uuid import uuid4
 
 import boto3
 import httpx
 import pytest
+from code_analyst_contracts import ConversationCreateRequest
+from control_plane_app.app_state_store import AppStateStore
+from control_plane_app.app_state_store import AppStateStore
 from control_plane_app.config import Settings as ControlPlaneSettings
 from control_plane_app.main import AppState as ControlPlaneAppState
 from control_plane_app.main import app as control_plane_app
@@ -70,6 +74,7 @@ def build_control_plane_state(
     state.conversation_store = ConversationStateStore(state.object_store)
     state.run_store = RunStateStore(state.object_store)
     state.approval_store = ApprovalStateStore(state.object_store)
+    state.app_state_store = AppStateStore(state.object_store)
     state.workspace_import_service = WorkspaceImportService(
         settings=settings,
         object_store=state.object_store,
@@ -83,6 +88,7 @@ def build_control_plane_state(
         run_store=state.run_store,
         workspace_store=state.workspace_store,
         approval_store=state.approval_store,
+        app_state_store=state.app_state_store,
     )
     return state
 
@@ -135,22 +141,29 @@ def test_state_persists_across_control_plane_restart(
     assert import_response.status_code == 200
     workspace_id = import_response.json()["workspace_id"]
 
-    conversation_response = client.post(
-        "/v1/conversations",
-        json={
-            "tenant_id": "tenant_test",
-            "workspace_id": workspace_id,
-            "title": "Persistent conversation",
-        },
+    # Create conversation directly via store (bypassing repo-scoping auth)
+    conversation_id = f"conv_{uuid4().hex[:12]}"
+    control_plane_app.state.state.conversation_store.create_conversation(
+        conversation_id=conversation_id,
+        request=ConversationCreateRequest(
+            tenant_id="tenant_test",
+            repo_def_id="__legacy__",
+            workspace_id=workspace_id,
+            title="Persistent conversation",
+        ),
+        principal_email="test@test.com",
+        workspace_id=workspace_id,
     )
-    assert conversation_response.status_code == 200
-    conversation_id = conversation_response.json()["conversation_id"]
 
     first_question_response = client.post(
         f"/v1/conversations/{conversation_id}/questions",
         json={
             "message": "What does answer return?",
             "resume_sandbox": True,
+        },
+        headers={
+            "X-Tenant-Id": "tenant_test",
+            "X-User-Email": "test@test.com",
         },
     )
     assert first_question_response.status_code == 200
@@ -174,6 +187,10 @@ def test_state_persists_across_control_plane_restart(
         json={
             "message": "Show more detail from service.py",
             "resume_sandbox": True,
+        },
+        headers={
+            "X-Tenant-Id": "tenant_test",
+            "X-User-Email": "test@test.com",
         },
     )
     assert second_question_response.status_code == 200
@@ -199,3 +216,20 @@ def test_state_persists_across_control_plane_restart(
         "user.message.created",
         "assistant.message.created",
     ]
+
+    conversation_events_response = restarted_client.get(
+        f"/v1/conversations/{conversation_id}/events",
+        headers={
+            "X-Tenant-Id": "tenant_test",
+            "X-User-Email": "test@test.com",
+        },
+    )
+    assert conversation_events_response.status_code == 200
+    event_payload = conversation_events_response.json()
+    assert [event["type"] for event in event_payload] == [
+        "user.message.created",
+        "assistant.message.created",
+        "user.message.created",
+        "assistant.message.created",
+    ]
+    assert event_payload[-1]["payload"]["answer_markdown"]

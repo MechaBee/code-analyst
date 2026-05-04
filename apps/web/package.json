@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev -p 3001",
     "build": "next build",
-    "start": "tsx server/index.ts",
+    "start": "next start -H 0.0.0.0 -p 3000",
     "server:dev": "tsx watch server/index.ts",
     "typecheck": "tsc --noEmit && tsc -p server/tsconfig.json --noEmit",
     "test:e2e": "playwright test",

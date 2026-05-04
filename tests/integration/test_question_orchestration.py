@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from uuid import uuid4
 
 import boto3
 import httpx
 import pytest
+from code_analyst_contracts import ConversationCreateRequest
+from control_plane_app.app_state_store import AppStateStore
 from control_plane_app.main import app as control_plane_app
 from control_plane_app.main import AppState as ControlPlaneAppState
 from control_plane_app.object_store import ObjectStore as ControlPlaneObjectStore
@@ -98,6 +101,7 @@ def test_question_flow_calls_sandbox_supervisor(
     )
     control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
     control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
+    control_plane_state.app_state_store = AppStateStore(control_plane_state.object_store)
     control_plane_state.workspace_import_service = WorkspaceImportService(
         settings=control_plane_settings,
         object_store=control_plane_state.object_store,
@@ -111,10 +115,17 @@ def test_question_flow_calls_sandbox_supervisor(
         run_store=control_plane_state.run_store,
         workspace_store=control_plane_state.workspace_store,
         approval_store=control_plane_state.approval_store,
+        app_state_store=control_plane_state.app_state_store,
     )
     control_plane_app.state.state = control_plane_state
 
-    client = TestClient(control_plane_app)
+    client = TestClient(
+        control_plane_app,
+        headers={
+            "X-Tenant-Id": "tenant_test",
+            "X-User-Email": "test@test.com",
+        },
+    )
 
     import_response = client.post(
         "/v1/workspaces/imports/github",
@@ -128,16 +139,19 @@ def test_question_flow_calls_sandbox_supervisor(
     assert import_response.status_code == 200
     snapshot_payload = import_response.json()
 
-    conversation_response = client.post(
-        "/v1/conversations",
-        json={
-            "tenant_id": "tenant_test",
-            "workspace_id": snapshot_payload["workspace_id"],
-            "title": "Question flow conversation",
-        },
+    # Create conversation directly via store (bypassing repo-scoping auth for legacy import tests)
+    conversation_id = f"conv_{uuid4().hex[:12]}"
+    control_plane_state.conversation_store.create_conversation(
+        conversation_id=conversation_id,
+        request=ConversationCreateRequest(
+            tenant_id="tenant_test",
+            repo_def_id="__legacy__",
+            workspace_id=snapshot_payload["workspace_id"],
+            title="Question flow conversation",
+        ),
+        principal_email="test@test.com",
+        workspace_id=snapshot_payload["workspace_id"],
     )
-    assert conversation_response.status_code == 200
-    conversation_id = conversation_response.json()["conversation_id"]
 
     question_response = client.post(
         f"/v1/conversations/{conversation_id}/questions",
@@ -221,6 +235,7 @@ def test_question_flow_disposes_sandbox_when_not_resuming(
     )
     control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
     control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
+    control_plane_state.app_state_store = AppStateStore(control_plane_state.object_store)
     control_plane_state.workspace_import_service = WorkspaceImportService(
         settings=control_plane_settings,
         object_store=control_plane_state.object_store,
@@ -234,10 +249,17 @@ def test_question_flow_disposes_sandbox_when_not_resuming(
         run_store=control_plane_state.run_store,
         workspace_store=control_plane_state.workspace_store,
         approval_store=control_plane_state.approval_store,
+        app_state_store=control_plane_state.app_state_store,
     )
     control_plane_app.state.state = control_plane_state
 
-    client = TestClient(control_plane_app)
+    client = TestClient(
+        control_plane_app,
+        headers={
+            "X-Tenant-Id": "tenant_test",
+            "X-User-Email": "test@test.com",
+        },
+    )
 
     import_response = client.post(
         "/v1/workspaces/imports/github",
@@ -251,16 +273,19 @@ def test_question_flow_disposes_sandbox_when_not_resuming(
     assert import_response.status_code == 200
     snapshot_payload = import_response.json()
 
-    conversation_response = client.post(
-        "/v1/conversations",
-        json={
-            "tenant_id": "tenant_test",
-            "workspace_id": snapshot_payload["workspace_id"],
-            "title": "Dispose test conversation",
-        },
+    # Create conversation directly via store (bypassing repo-scoping auth for legacy import tests)
+    conversation_id = f"conv_{uuid4().hex[:12]}"
+    control_plane_state.conversation_store.create_conversation(
+        conversation_id=conversation_id,
+        request=ConversationCreateRequest(
+            tenant_id="tenant_test",
+            repo_def_id="__legacy__",
+            workspace_id=snapshot_payload["workspace_id"],
+            title="Dispose test conversation",
+        ),
+        principal_email="test@test.com",
+        workspace_id=snapshot_payload["workspace_id"],
     )
-    assert conversation_response.status_code == 200
-    conversation_id = conversation_response.json()["conversation_id"]
 
     question_response = client.post(
         f"/v1/conversations/{conversation_id}/questions",
@@ -326,6 +351,7 @@ def test_question_flow_requires_approval_and_approves(
     )
     control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
     control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
+    control_plane_state.app_state_store = AppStateStore(control_plane_state.object_store)
     control_plane_state.workspace_import_service = WorkspaceImportService(
         settings=control_plane_settings,
         object_store=control_plane_state.object_store,
@@ -339,10 +365,17 @@ def test_question_flow_requires_approval_and_approves(
         run_store=control_plane_state.run_store,
         workspace_store=control_plane_state.workspace_store,
         approval_store=control_plane_state.approval_store,
+        app_state_store=control_plane_state.app_state_store,
     )
     control_plane_app.state.state = control_plane_state
 
-    client = TestClient(control_plane_app)
+    client = TestClient(
+        control_plane_app,
+        headers={
+            "X-Tenant-Id": "tenant_test",
+            "X-User-Email": "test@test.com",
+        },
+    )
 
     import_response = client.post(
         "/v1/workspaces/imports/github",
@@ -356,16 +389,19 @@ def test_question_flow_requires_approval_and_approves(
     assert import_response.status_code == 200
     snapshot_payload = import_response.json()
 
-    conversation_response = client.post(
-        "/v1/conversations",
-        json={
-            "tenant_id": "tenant_test",
-            "workspace_id": snapshot_payload["workspace_id"],
-            "title": "Approval flow conversation",
-        },
+    # Create conversation directly via store (bypassing repo-scoping auth for legacy import tests)
+    conversation_id = f"conv_{uuid4().hex[:12]}"
+    control_plane_state.conversation_store.create_conversation(
+        conversation_id=conversation_id,
+        request=ConversationCreateRequest(
+            tenant_id="tenant_test",
+            repo_def_id="__legacy__",
+            workspace_id=snapshot_payload["workspace_id"],
+            title="Approval flow conversation",
+        ),
+        principal_email="test@test.com",
+        workspace_id=snapshot_payload["workspace_id"],
     )
-    assert conversation_response.status_code == 200
-    conversation_id = conversation_response.json()["conversation_id"]
 
     # Ask a question with approval_policy=required
     question_response = client.post(
@@ -453,6 +489,7 @@ def test_question_flow_requires_approval_and_denies(
     )
     control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
     control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
+    control_plane_state.app_state_store = AppStateStore(control_plane_state.object_store)
     control_plane_state.workspace_import_service = WorkspaceImportService(
         settings=control_plane_settings,
         object_store=control_plane_state.object_store,
@@ -466,10 +503,17 @@ def test_question_flow_requires_approval_and_denies(
         run_store=control_plane_state.run_store,
         workspace_store=control_plane_state.workspace_store,
         approval_store=control_plane_state.approval_store,
+        app_state_store=control_plane_state.app_state_store,
     )
     control_plane_app.state.state = control_plane_state
 
-    client = TestClient(control_plane_app)
+    client = TestClient(
+        control_plane_app,
+        headers={
+            "X-Tenant-Id": "tenant_test",
+            "X-User-Email": "test@test.com",
+        },
+    )
 
     import_response = client.post(
         "/v1/workspaces/imports/github",
@@ -483,16 +527,19 @@ def test_question_flow_requires_approval_and_denies(
     assert import_response.status_code == 200
     snapshot_payload = import_response.json()
 
-    conversation_response = client.post(
-        "/v1/conversations",
-        json={
-            "tenant_id": "tenant_test",
-            "workspace_id": snapshot_payload["workspace_id"],
-            "title": "Approval deny conversation",
-        },
+    # Create conversation directly via store (bypassing repo-scoping auth for legacy import tests)
+    conversation_id = f"conv_{uuid4().hex[:12]}"
+    control_plane_state.conversation_store.create_conversation(
+        conversation_id=conversation_id,
+        request=ConversationCreateRequest(
+            tenant_id="tenant_test",
+            repo_def_id="__legacy__",
+            workspace_id=snapshot_payload["workspace_id"],
+            title="Approval deny conversation",
+        ),
+        principal_email="test@test.com",
+        workspace_id=snapshot_payload["workspace_id"],
     )
-    assert conversation_response.status_code == 200
-    conversation_id = conversation_response.json()["conversation_id"]
 
     question_response = client.post(
         f"/v1/conversations/{conversation_id}/questions",

@@ -38,7 +38,7 @@ integration testing across services.
 The first local stack is designed to run with Docker Compose and MinIO as the S3-compatible object store.
 
 ```bash
-docker compose up --build
+docker compose --env-file .env up --build -d
 ```
 
 Available endpoints:

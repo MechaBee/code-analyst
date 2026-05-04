@@ -15,6 +15,8 @@ export default function ChatView() {
     conversationId,
     workspaceId,
     snapshotId,
+    repoDefId,
+    checkoutId,
     isLoading,
     pendingApproval,
     chatError,
@@ -32,12 +34,59 @@ export default function ChatView() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [inputValue, setInputValue] = React.useState('');
   const currentRunIdRef = useRef<string | null>(null);
+  const [repoLabel, setRepoLabel] = React.useState<string | null>(null);
+  const [branchLabel, setBranchLabel] = React.useState<string | null>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, isLoading]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadConversationContext() {
+      if (!repoDefId) {
+        setRepoLabel(null);
+        setBranchLabel(null);
+        return;
+      }
+
+      try {
+        const repo = await api.getRepoDefinition(repoDefId);
+        if (!cancelled) {
+          setRepoLabel(repo.name || repo.endpoint);
+        }
+      } catch {
+        if (!cancelled) {
+          setRepoLabel(repoDefId);
+        }
+      }
+
+      if (!checkoutId) {
+        setBranchLabel(null);
+        return;
+      }
+
+      try {
+        const checkout = await api.getCheckout(checkoutId);
+        if (!cancelled) {
+          setBranchLabel(checkout.branch);
+        }
+      } catch {
+        if (!cancelled) {
+          setBranchLabel(null);
+        }
+      }
+    }
+
+    loadConversationContext();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, repoDefId, checkoutId]);
 
   const handleEventSubscription = useCallback((runId: string) => {
     currentRunIdRef.current = runId;
@@ -194,12 +243,24 @@ export default function ChatView() {
   };
 
   return (
-    <div className="flex h-screen flex-col bg-cream">
+    <div className="flex h-full min-h-0 flex-col bg-cream">
       {/* Header */}
       <header className="flex items-center justify-between border-b border-line bg-panel px-6 py-3">
         <div className="flex items-center gap-3">
           <div className="h-8 w-8 rounded-lg bg-accent" />
-          <h1 className="text-base font-semibold text-ink">Code Analyst</h1>
+          <div>
+            <h1 className="text-base font-semibold text-ink">Code Analyst</h1>
+            {(repoLabel || repoDefId || branchLabel || checkoutId) && (
+              <div className="text-xs text-muted">
+                {(repoLabel || repoDefId) && <span>Repo: {repoLabel || repoDefId} </span>}
+                {branchLabel ? (
+                  <span>• Branch: {branchLabel}</span>
+                ) : (
+                  checkoutId && <span>• Checkout: {checkoutId.slice(0, 12)}…</span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
         <div className="text-xs text-muted">
           {workspaceId ? `Workspace: ${workspaceId.slice(0, 12)}…` : 'No workspace'}
@@ -209,7 +270,7 @@ export default function ChatView() {
       {/* Messages */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-4 py-6 sm:px-6"
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6"
       >
         <div className="mx-auto flex max-w-3xl flex-col gap-5">
           {messages.length === 0 && (

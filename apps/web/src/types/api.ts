@@ -25,13 +25,47 @@ export interface WorkspaceImportResponse {
 
 export interface ConversationCreateRequest {
   tenant_id: string;
-  workspace_id: string;
+  repo_def_id: string;
+  checkout_id?: string | null;
+  workspace_id?: string | null;
   title?: string;
 }
 
 export interface ConversationCreateResponse {
   conversation_id: string;
   status: string;
+}
+
+export interface ConversationHead {
+  conversation_id: string;
+  tenant_id: string;
+  workspace_id: string;
+  repo_def_id?: string | null;
+  checkout_id?: string | null;
+  principal_email: string;
+  title?: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  last_event_sequence: number;
+  latest_run_id?: string | null;
+  active_sandbox_id?: string | null;
+  latest_snapshot_id?: string | null;
+}
+
+export interface ConversationListResponse {
+  tenant_id: string;
+  conversations: ConversationHead[];
+}
+
+export interface ConversationEvent {
+  event_id: string;
+  conversation_id: string;
+  run_id?: string | null;
+  sequence: number;
+  type: string;
+  payload: Record<string, unknown>;
+  timestamp: string;
 }
 
 export interface QuestionRequest {
@@ -98,4 +132,166 @@ export interface Message {
   followups?: string[];
   isLoading?: boolean;
   error?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1: Identity, Team, and Repository Definition types
+// ---------------------------------------------------------------------------
+
+export interface RepositoryAdapter {
+  kind: string; // "github" | "gitlab"
+  credential_ref: string;
+}
+
+export interface RepositoryDefinition {
+  tenant_id: string;
+  repo_def_id: string;
+  name?: string | null;
+  endpoint: string;
+  adapter: RepositoryAdapter;
+  team_ids: string[];
+  created_at: string;
+}
+
+export interface User {
+  tenant_id: string;
+  email: string;
+  name?: string | null;
+  is_admin: boolean;
+  created_at: string;
+}
+
+export interface Team {
+  tenant_id: string;
+  team_id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface TeamMembership {
+  tenant_id: string;
+  team_id: string;
+  user_email: string;
+  joined_at: string;
+}
+
+export interface TeamCreateRequest {
+  name: string;
+}
+
+export interface TeamCreateResponse {
+  team_id: string;
+  tenant_id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface TeamListResponse {
+  tenant_id: string;
+  teams: Team[];
+}
+
+export interface TeamMemberAddRequest {
+  user_email: string;
+}
+
+export interface TeamMemberAddResponse {
+  team_id: string;
+  user_email: string;
+  joined_at: string;
+}
+
+export interface TeamMemberRemoveResponse {
+  team_id: string;
+  user_email: string;
+}
+
+export interface UserCreateRequest {
+  email: string;
+  name?: string | null;
+  is_admin?: boolean;
+}
+
+export interface UserCreateResponse {
+  tenant_id: string;
+  email: string;
+  name?: string | null;
+  is_admin: boolean;
+  created_at: string;
+}
+
+export interface UserMeResponse {
+  tenant_id: string;
+  email: string;
+  name?: string | null;
+  is_admin: boolean;
+}
+
+export interface RepositoryDefinitionCreateRequest {
+  name?: string | null;
+  endpoint: string;
+  adapter: RepositoryAdapter;
+  team_ids?: string[];
+}
+
+export interface RepositoryDefinitionCreateResponse {
+  tenant_id: string;
+  repo_def_id: string;
+  name?: string | null;
+  endpoint: string;
+  adapter: RepositoryAdapter;
+  team_ids: string[];
+  created_at: string;
+}
+
+export interface RepositoryDefinitionListResponse {
+  tenant_id: string;
+  repo_definitions: RepositoryDefinition[];
+}
+
+export interface RepositoryDefinitionUpdateTeamsRequest {
+  team_ids: string[];
+}
+
+export interface RepositoryDefinitionUpdateTeamsResponse {
+  tenant_id: string;
+  repo_def_id: string;
+  team_ids: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: Checkout types
+// ---------------------------------------------------------------------------
+
+export interface Checkout {
+  tenant_id: string;
+  checkout_id: string;
+  repo_def_id: string;
+  branch: string;
+  commit_sha: string;
+  run_timestamp: string;
+  workspace_id: string;
+  snapshot_id: string;
+  archived: boolean;
+}
+
+export interface CheckoutCreateRequest {
+  repo_def_id: string;
+  ref: string;
+}
+
+export interface CheckoutCreateResponse {
+  tenant_id: string;
+  checkout_id: string;
+  repo_def_id: string;
+  branch: string;
+  commit_sha: string;
+  run_timestamp: string;
+  workspace_id: string;
+  snapshot_id: string;
+}
+
+export interface CheckoutListResponse {
+  tenant_id: string;
+  checkouts: Checkout[];
 }
