@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import type {
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
+  AdminTeamListResponse,
   Checkout,
   CheckoutCreateRequest,
   CheckoutCreateResponse,
@@ -24,12 +25,14 @@ import type {
   RepositoryDefinitionUpdateTeamsResponse,
   TeamCreateRequest,
   TeamCreateResponse,
+  TeamDetailResponse,
   TeamListResponse,
   TeamMemberAddRequest,
   TeamMemberAddResponse,
   TeamMemberRemoveResponse,
   UserCreateRequest,
   UserCreateResponse,
+  UserListResponse,
   UserMeResponse,
   WorkspaceImportRequest,
   WorkspaceImportResponse,
@@ -111,6 +114,7 @@ export function useApi() {
 
       // Phase 1: Identity
       me: () => apiFetch<UserMeResponse>('/v1/users/me'),
+      listUsers: () => apiFetch<UserListResponse>('/v1/admin/users'),
       createUser: (req: UserCreateRequest) =>
         apiFetch<UserCreateResponse>('/v1/users', {
           method: 'POST',
@@ -124,6 +128,9 @@ export function useApi() {
           body: JSON.stringify(req),
         }),
       listTeams: () => apiFetch<TeamListResponse>('/v1/teams'),
+      listAdminTeams: () => apiFetch<AdminTeamListResponse>('/v1/admin/teams'),
+      getAdminTeamDetail: (teamId: string) =>
+        apiFetch<TeamDetailResponse>(`/v1/admin/teams/${teamId}`),
       addTeamMember: (teamId: string, req: TeamMemberAddRequest) =>
         apiFetch<TeamMemberAddResponse>(`/v1/teams/${teamId}/members`, {
           method: 'POST',
@@ -140,6 +147,8 @@ export function useApi() {
           method: 'POST',
           body: JSON.stringify(req),
         }),
+      listAdminRepoDefinitions: () =>
+        apiFetch<RepositoryDefinitionListResponse>('/v1/admin/repos'),
       listRepoDefinitions: () =>
         apiFetch<RepositoryDefinitionListResponse>('/v1/repos'),
       getRepoDefinition: (repoDefId: string) =>

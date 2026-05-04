@@ -9,6 +9,7 @@ from uuid import uuid4
 from code_analyst_contracts import (
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
+    AdminTeamListResponse,
     Checkout,
     CheckoutCreateRequest,
     CheckoutCreateResponse,
@@ -32,14 +33,18 @@ from code_analyst_contracts import (
     Team,
     TeamCreateRequest,
     TeamCreateResponse,
+    TeamDetailResponse,
     TeamListResponse,
     TeamMemberAddRequest,
     TeamMemberAddResponse,
+    TeamMemberRecord,
     TeamMemberRemoveResponse,
     TeamMembership,
+    TeamSummary,
     User,
     UserCreateRequest,
     UserCreateResponse,
+    UserListResponse,
     UserMeResponse,
     WorkspaceImportRequest,
     WorkspaceImportResponse,
@@ -141,13 +146,7 @@ async def create_conversation(
     )
     if repo_def is None:
         raise HTTPException(status_code=404, detail="Repository definition not found.")
-
-    user_teams = app.state.state.app_state_store.list_teams_for_user(
-        tenant_id, principal.email
-    )
-    user_team_ids = {t.team_id for t in user_teams}
-    if not any(tid in user_team_ids for tid in repo_def.team_ids):
-        raise HTTPException(status_code=403, detail="Access denied to this repository.")
+    ensure_repo_access(principal, repo_def)
 
     # Resolve workspace_id from checkout or request
     workspace_id: str | None = None
@@ -427,6 +426,56 @@ async def ensure_user(request: Request) -> User:
     return user
 
 
+def require_admin(principal: User) -> None:
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+
+
+def normalize_team_name(name: str) -> str:
+    normalized = name.strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Team name is required.")
+    return normalized
+
+
+def normalize_team_ids(tenant_id: str, team_ids: list[str]) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for raw_team_id in team_ids:
+        team_id = raw_team_id.strip()
+        if not team_id or team_id in seen:
+            continue
+        seen.add(team_id)
+        normalized.append(team_id)
+
+    missing = [
+        team_id for team_id in normalized
+        if app.state.state.app_state_store.get_team(tenant_id, team_id) is None
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown team id(s): {', '.join(missing)}",
+        )
+    return normalized
+
+
+def principal_can_access_repo(principal: User, repo_def: RepositoryDefinition) -> bool:
+    if principal.is_admin:
+        return True
+    user_teams = app.state.state.app_state_store.list_teams_for_user(
+        principal.tenant_id,
+        principal.email,
+    )
+    user_team_ids = {team.team_id for team in user_teams}
+    return any(team_id in user_team_ids for team_id in repo_def.team_ids)
+
+
+def ensure_repo_access(principal: User, repo_def: RepositoryDefinition) -> None:
+    if not principal_can_access_repo(principal, repo_def):
+        raise HTTPException(status_code=403, detail="Access denied to this repository.")
+
+
 # ---------------------------------------------------------------------------
 # Admin & Identity Endpoints
 # ---------------------------------------------------------------------------
@@ -438,13 +487,12 @@ async def create_team(
     body: TeamCreateRequest,
 ) -> TeamCreateResponse:
     principal = await ensure_user(request)
-    if not principal.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required.")
+    require_admin(principal)
     tenant_id, _ = get_principal(request)
     team = Team(
         tenant_id=tenant_id,
         team_id=new_id("team"),
-        name=body.name,
+        name=normalize_team_name(body.name),
     )
     await run_in_threadpool(
         app.state.state.app_state_store.create_team,
@@ -461,13 +509,125 @@ async def create_team(
 @app.get("/v1/teams", response_model=TeamListResponse)
 async def list_teams(request: Request) -> TeamListResponse:
     principal = await ensure_user(request)
+    require_admin(principal)
     teams = await run_in_threadpool(
         app.state.state.app_state_store.list_teams,
         principal.tenant_id,
     )
     return TeamListResponse(
         tenant_id=principal.tenant_id,
-        teams=teams,
+        teams=sorted(teams, key=lambda team: (team.name.lower(), team.team_id)),
+    )
+
+
+@app.get("/v1/admin/users", response_model=UserListResponse)
+async def list_admin_users(request: Request) -> UserListResponse:
+    principal = await ensure_user(request)
+    require_admin(principal)
+    users = await run_in_threadpool(
+        app.state.state.app_state_store.list_users,
+        principal.tenant_id,
+    )
+    return UserListResponse(
+        tenant_id=principal.tenant_id,
+        users=sorted(users, key=lambda user: (user.email.lower(), user.created_at)),
+    )
+
+
+@app.get("/v1/admin/teams", response_model=AdminTeamListResponse)
+async def list_admin_teams(request: Request) -> AdminTeamListResponse:
+    principal = await ensure_user(request)
+    require_admin(principal)
+    db = await run_in_threadpool(
+        app.state.state.app_state_store.load_tenant_db,
+        principal.tenant_id,
+    )
+
+    member_counts: dict[str, int] = {}
+    for membership in db.memberships:
+        member_counts[membership.team_id] = member_counts.get(membership.team_id, 0) + 1
+
+    team_summaries = [
+        TeamSummary(
+            tenant_id=team.tenant_id,
+            team_id=team.team_id,
+            name=team.name,
+            created_at=team.created_at,
+            member_count=member_counts.get(team.team_id, 0),
+        )
+        for team in sorted(db.teams.values(), key=lambda item: (item.name.lower(), item.team_id))
+    ]
+
+    return AdminTeamListResponse(
+        tenant_id=principal.tenant_id,
+        teams=team_summaries,
+    )
+
+
+@app.get("/v1/admin/teams/{team_id}", response_model=TeamDetailResponse)
+async def get_admin_team_detail(
+    request: Request,
+    team_id: str,
+) -> TeamDetailResponse:
+    principal = await ensure_user(request)
+    require_admin(principal)
+    db = await run_in_threadpool(
+        app.state.state.app_state_store.load_tenant_db,
+        principal.tenant_id,
+    )
+
+    team = db.teams.get(team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="Team not found.")
+
+    members: list[TeamMemberRecord] = []
+    memberships = sorted(
+        (membership for membership in db.memberships if membership.team_id == team_id),
+        key=lambda membership: membership.user_email.lower(),
+    )
+    for membership in memberships:
+        user = db.users.get(membership.user_email)
+        members.append(
+            TeamMemberRecord(
+                tenant_id=membership.tenant_id,
+                team_id=membership.team_id,
+                user_email=membership.user_email,
+                name=user.name if user is not None else None,
+                is_admin=user.is_admin if user is not None else False,
+                joined_at=membership.joined_at,
+            )
+        )
+
+    repositories = sorted(
+        (
+            repo_def for repo_def in db.repo_definitions.values()
+            if team_id in repo_def.team_ids
+        ),
+        key=lambda repo_def: ((repo_def.name or repo_def.endpoint).lower(), repo_def.repo_def_id),
+    )
+
+    return TeamDetailResponse(
+        tenant_id=principal.tenant_id,
+        team=team,
+        members=members,
+        repositories=repositories,
+    )
+
+
+@app.get("/v1/admin/repos", response_model=RepositoryDefinitionListResponse)
+async def list_admin_repo_definitions(request: Request) -> RepositoryDefinitionListResponse:
+    principal = await ensure_user(request)
+    require_admin(principal)
+    repo_defs = await run_in_threadpool(
+        app.state.state.app_state_store.list_repo_definitions,
+        principal.tenant_id,
+    )
+    return RepositoryDefinitionListResponse(
+        tenant_id=principal.tenant_id,
+        repo_definitions=sorted(
+            repo_defs,
+            key=lambda repo_def: ((repo_def.name or repo_def.endpoint).lower(), repo_def.repo_def_id),
+        ),
     )
 
 
@@ -478,13 +638,22 @@ async def add_team_member(
     body: TeamMemberAddRequest,
 ) -> TeamMemberAddResponse:
     principal = await ensure_user(request)
+    require_admin(principal)
     tenant_id = principal.tenant_id
-    return await run_in_threadpool(
-        app.state.state.app_state_store.add_team_membership,
-        tenant_id,
-        team_id,
-        body.user_email,
-    )
+    try:
+        return await run_in_threadpool(
+            app.state.state.app_state_store.add_team_membership,
+            tenant_id,
+            team_id,
+            body.user_email.strip(),
+        )
+    except KeyError as error:
+        detail = str(error).strip("'")
+        if detail.startswith("User "):
+            raise HTTPException(status_code=404, detail="User not found.") from error
+        if detail.startswith("Team "):
+            raise HTTPException(status_code=404, detail="Team not found.") from error
+        raise HTTPException(status_code=400, detail=detail) from error
 
 
 @app.delete("/v1/teams/{team_id}/members/{user_email}", response_model=TeamMemberRemoveResponse)
@@ -494,13 +663,17 @@ async def remove_team_member(
     user_email: str,
 ) -> TeamMemberRemoveResponse:
     principal = await ensure_user(request)
+    require_admin(principal)
     tenant_id = principal.tenant_id
-    return await run_in_threadpool(
-        app.state.state.app_state_store.remove_team_membership,
-        tenant_id,
-        team_id,
-        user_email,
-    )
+    try:
+        return await run_in_threadpool(
+            app.state.state.app_state_store.remove_team_membership,
+            tenant_id,
+            team_id,
+            user_email,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Membership not found.") from error
 
 
 @app.get("/v1/users/me", response_model=UserMeResponse)
@@ -538,10 +711,14 @@ async def create_user(
         if not existing_principal or not existing_principal.is_admin:
             raise HTTPException(status_code=403, detail="Admin access required.")
 
+    email = body.email.strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required.")
+
     user = User(
         tenant_id=tenant_id,
-        email=body.email,
-        name=body.name,
+        email=email,
+        name=body.name.strip() if body.name else None,
         is_admin=body.is_admin,
     )
     await run_in_threadpool(
@@ -568,13 +745,15 @@ async def create_repo_definition(
     body: RepositoryDefinitionCreateRequest,
 ) -> RepositoryDefinitionCreateResponse:
     principal = await ensure_user(request)
+    require_admin(principal)
+    team_ids = normalize_team_ids(principal.tenant_id, body.team_ids)
     repo_def = RepositoryDefinition(
         tenant_id=principal.tenant_id,
         repo_def_id=new_id("repo"),
-        name=body.name,
+        name=body.name.strip() if body.name else None,
         endpoint=body.endpoint,
         adapter=body.adapter,
-        team_ids=body.team_ids,
+        team_ids=team_ids,
     )
     await run_in_threadpool(
         app.state.state.app_state_store.create_repo_definition,
@@ -594,14 +773,23 @@ async def create_repo_definition(
 @app.get("/v1/repos", response_model=RepositoryDefinitionListResponse)
 async def list_repo_definitions(request: Request) -> RepositoryDefinitionListResponse:
     principal = await ensure_user(request)
-    repo_defs = await run_in_threadpool(
-        app.state.state.app_state_store.list_repo_definitions_for_principal,
-        principal.tenant_id,
-        principal.email,
-    )
+    if principal.is_admin:
+        repo_defs = await run_in_threadpool(
+            app.state.state.app_state_store.list_repo_definitions,
+            principal.tenant_id,
+        )
+    else:
+        repo_defs = await run_in_threadpool(
+            app.state.state.app_state_store.list_repo_definitions_for_principal,
+            principal.tenant_id,
+            principal.email,
+        )
     return RepositoryDefinitionListResponse(
         tenant_id=principal.tenant_id,
-        repo_definitions=repo_defs,
+        repo_definitions=sorted(
+            repo_defs,
+            key=lambda repo_def: ((repo_def.name or repo_def.endpoint).lower(), repo_def.repo_def_id),
+        ),
     )
 
 
@@ -618,6 +806,7 @@ async def get_repo_definition(
     )
     if repo_def is None:
         raise HTTPException(status_code=404, detail="Repository definition not found.")
+    ensure_repo_access(principal, repo_def)
     return repo_def
 
 
@@ -631,11 +820,13 @@ async def update_repo_definition_teams(
     body: RepositoryDefinitionUpdateTeamsRequest,
 ) -> RepositoryDefinitionUpdateTeamsResponse:
     principal = await ensure_user(request)
+    require_admin(principal)
+    team_ids = normalize_team_ids(principal.tenant_id, body.team_ids)
     return await run_in_threadpool(
         app.state.state.app_state_store.update_repo_definition_teams,
         principal.tenant_id,
         repo_def_id,
-        body.team_ids,
+        team_ids,
     )
 
 
@@ -657,12 +848,7 @@ async def create_checkout(
     repo_def = app.state.state.app_state_store.get_repo_definition(tenant_id, repo_def_id)
     if repo_def is None:
         raise HTTPException(status_code=404, detail="Repository definition not found.")
-
-    # Check principal has team access
-    user_teams = app.state.state.app_state_store.list_teams_for_user(tenant_id, principal.email)
-    user_team_ids = {t.team_id for t in user_teams}
-    if not any(tid in user_team_ids for tid in repo_def.team_ids):
-        raise HTTPException(status_code=403, detail="Access denied to this repository.")
+    ensure_repo_access(principal, repo_def)
 
     # Import via workspace service using the repo def's adapter
     try:
@@ -721,12 +907,24 @@ async def list_checkouts_for_repo(
 ) -> CheckoutListResponse:
     principal = await ensure_user(request)
     tenant_id = principal.tenant_id
+    repo_def = await run_in_threadpool(
+        app.state.state.app_state_store.get_repo_definition,
+        tenant_id,
+        repo_def_id,
+    )
+    if repo_def is None:
+        raise HTTPException(status_code=404, detail="Repository definition not found.")
+    ensure_repo_access(principal, repo_def)
+
     checkouts = await run_in_threadpool(
         app.state.state.app_state_store.list_checkouts_for_repo,
         tenant_id,
         repo_def_id,
     )
-    return CheckoutListResponse(tenant_id=tenant_id, checkouts=checkouts)
+    return CheckoutListResponse(
+        tenant_id=tenant_id,
+        checkouts=sorted(checkouts, key=lambda checkout: checkout.run_timestamp, reverse=True),
+    )
 
 
 @app.get("/v1/checkouts/{checkout_id}", response_model=Checkout)
@@ -742,4 +940,12 @@ async def get_checkout(
     )
     if checkout is None:
         raise HTTPException(status_code=404, detail="Checkout not found.")
+    repo_def = await run_in_threadpool(
+        app.state.state.app_state_store.get_repo_definition,
+        principal.tenant_id,
+        checkout.repo_def_id,
+    )
+    if repo_def is None:
+        raise HTTPException(status_code=404, detail="Repository definition not found.")
+    ensure_repo_access(principal, repo_def)
     return checkout

@@ -3,11 +3,13 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useApi } from '@/hooks/useApi';
+import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
 import NavBar from './NavBar';
 import type { RepositoryDefinition, RepositoryAdapter, Checkout } from '@/types/api';
 
 export default function RepoManager() {
+  const { isAdmin, isLoading: authLoading } = useAuth();
   const api = useApi();
   const [repos, setRepos] = useState<RepositoryDefinition[]>([]);
   const [checkoutsMap, setCheckoutsMap] = useState<Record<string, Checkout[]>>({});
@@ -87,80 +89,81 @@ export default function RepoManager() {
           </div>
         )}
 
-        {/* Create Form */}
-        <form onSubmit={handleCreate} className="space-y-4 rounded-xl border border-line bg-panel p-5 shadow-sm">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Add Repository</h2>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-ink">Name</label>
-              <input
-                type="text"
-                placeholder="My Project"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className={cn(
-                  'w-full rounded-lg border bg-cream px-3 py-2 text-sm text-ink outline-none',
-                  'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
-                  'border-line'
-                )}
-              />
+        {isAdmin && !authLoading && (
+          <form onSubmit={handleCreate} className="space-y-4 rounded-xl border border-line bg-panel p-5 shadow-sm">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Add Repository</h2>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink">Name</label>
+                <input
+                  type="text"
+                  placeholder="My Project"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className={cn(
+                    'w-full rounded-lg border bg-cream px-3 py-2 text-sm text-ink outline-none',
+                    'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
+                    'border-line'
+                  )}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink">Endpoint URL</label>
+                <input
+                  type="url"
+                  required
+                  placeholder="https://github.com/owner/repo.git"
+                  value={endpoint}
+                  onChange={(e) => setEndpoint(e.target.value)}
+                  className={cn(
+                    'w-full rounded-lg border bg-cream px-3 py-2 text-sm text-ink outline-none',
+                    'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
+                    'border-line'
+                  )}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink">Credential Ref</label>
+                <input
+                  type="text"
+                  value={credentialRef}
+                  onChange={(e) => setCredentialRef(e.target.value)}
+                  className={cn(
+                    'w-full rounded-lg border bg-cream px-3 py-2 text-sm text-ink outline-none',
+                    'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
+                    'border-line'
+                  )}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink">Team IDs (comma-separated)</label>
+                <input
+                  type="text"
+                  placeholder="team_01, team_02"
+                  value={teamIds}
+                  onChange={(e) => setTeamIds(e.target.value)}
+                  className={cn(
+                    'w-full rounded-lg border bg-cream px-3 py-2 text-sm text-ink outline-none',
+                    'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
+                    'border-line'
+                  )}
+                />
+              </div>
             </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-ink">Endpoint URL</label>
-              <input
-                type="url"
-                required
-                placeholder="https://github.com/owner/repo.git"
-                value={endpoint}
-                onChange={(e) => setEndpoint(e.target.value)}
-                className={cn(
-                  'w-full rounded-lg border bg-cream px-3 py-2 text-sm text-ink outline-none',
-                  'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
-                  'border-line'
-                )}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-ink">Credential Ref</label>
-              <input
-                type="text"
-                value={credentialRef}
-                onChange={(e) => setCredentialRef(e.target.value)}
-                className={cn(
-                  'w-full rounded-lg border bg-cream px-3 py-2 text-sm text-ink outline-none',
-                  'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
-                  'border-line'
-                )}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-ink">Team IDs (comma-separated)</label>
-              <input
-                type="text"
-                placeholder="team_01, team_02"
-                value={teamIds}
-                onChange={(e) => setTeamIds(e.target.value)}
-                className={cn(
-                  'w-full rounded-lg border bg-cream px-3 py-2 text-sm text-ink outline-none',
-                  'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
-                  'border-line'
-                )}
-              />
-            </div>
-          </div>
-          <button
-            type="submit"
-            disabled={loading || !endpoint.trim()}
-            className={cn(
-              'rounded-lg px-4 py-2 text-sm font-semibold text-white transition',
-              loading || !endpoint.trim()
-                ? 'cursor-not-allowed bg-accent/60'
-                : 'bg-accent hover:bg-accent/90'
-            )}
-          >
-            {loading ? 'Saving…' : 'Add Repository'}
-          </button>
-        </form>
+            <button
+              type="submit"
+              disabled={loading || !endpoint.trim()}
+              className={cn(
+                'rounded-lg px-4 py-2 text-sm font-semibold text-white transition',
+                loading || !endpoint.trim()
+                  ? 'cursor-not-allowed bg-accent/60'
+                  : 'bg-accent hover:bg-accent/90'
+              )}
+            >
+              {loading ? 'Saving…' : 'Add Repository'}
+            </button>
+          </form>
+        )}
 
         {/* List */}
         <div className="space-y-4">

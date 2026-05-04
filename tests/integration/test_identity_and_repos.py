@@ -113,6 +113,17 @@ def test_identity_and_repo_flow() -> None:
     )
     assert add_member_resp.status_code == 200
 
+    admin_users_resp = client.get("/v1/admin/users", headers=headers)
+    assert admin_users_resp.status_code == 200
+    admin_users = admin_users_resp.json()["users"]
+    assert [user["email"] for user in admin_users] == ["admin@test.com", "member@test.com"]
+
+    admin_teams_resp = client.get("/v1/admin/teams", headers=headers)
+    assert admin_teams_resp.status_code == 200
+    admin_teams = admin_teams_resp.json()["teams"]
+    assert admin_teams[0]["team_id"] == team_id
+    assert admin_teams[0]["member_count"] == 1
+
     # 6. Create a repository definition
     create_repo_resp = client.post(
         "/v1/repos",
@@ -129,6 +140,20 @@ def test_identity_and_repo_flow() -> None:
     assert repo_data["endpoint"] == "https://github.com/example/repo.git"
     repo_def_id = repo_data["repo_def_id"]
 
+    admin_team_detail_resp = client.get(
+        f"/v1/admin/teams/{team_id}",
+        headers=headers,
+    )
+    assert admin_team_detail_resp.status_code == 200
+    team_detail = admin_team_detail_resp.json()
+    assert team_detail["team"]["team_id"] == team_id
+    assert [member["user_email"] for member in team_detail["members"]] == ["member@test.com"]
+    assert [repo["repo_def_id"] for repo in team_detail["repositories"]] == [repo_def_id]
+
+    admin_repos_resp = client.get("/v1/admin/repos", headers=headers)
+    assert admin_repos_resp.status_code == 200
+    assert [repo["repo_def_id"] for repo in admin_repos_resp.json()["repo_definitions"]] == [repo_def_id]
+
     # 7. List repo definitions for principal (member user)
     member_headers = {
         "X-Tenant-Id": "tenant_test",
@@ -139,6 +164,19 @@ def test_identity_and_repo_flow() -> None:
     repos = list_repos_resp.json()["repo_definitions"]
     assert len(repos) == 1
     assert repos[0]["repo_def_id"] == repo_def_id
+
+    member_admin_users_resp = client.get("/v1/admin/users", headers=member_headers)
+    assert member_admin_users_resp.status_code == 403
+
+    member_list_teams_resp = client.get("/v1/teams", headers=member_headers)
+    assert member_list_teams_resp.status_code == 403
+
+    member_add_self_resp = client.post(
+        f"/v1/teams/{team_id}/members",
+        json={"user_email": "member@test.com"},
+        headers=member_headers,
+    )
+    assert member_add_self_resp.status_code == 403
 
     # 8. Get repo definition
     get_repo_resp = client.get(f"/v1/repos/{repo_def_id}", headers=headers)
@@ -153,10 +191,24 @@ def test_identity_and_repo_flow() -> None:
     )
     assert update_resp.status_code == 200
 
+    member_update_repo_resp = client.patch(
+        f"/v1/repos/{repo_def_id}/teams",
+        json={"team_ids": [team_id]},
+        headers=member_headers,
+    )
+    assert member_update_repo_resp.status_code == 403
+
     # After removing team access, member should see no repos
     list_repos_after = client.get("/v1/repos", headers=member_headers)
     assert list_repos_after.status_code == 200
     assert len(list_repos_after.json()["repo_definitions"]) == 0
+
+    member_get_repo_after = client.get(f"/v1/repos/{repo_def_id}", headers=member_headers)
+    assert member_get_repo_after.status_code == 403
+
+    admin_repos_after = client.get("/v1/repos", headers=headers)
+    assert admin_repos_after.status_code == 200
+    assert len(admin_repos_after.json()["repo_definitions"]) == 1
 
     # 10. Verify app_state.json was persisted
     from control_plane_app.app_state_store import AppStateStore

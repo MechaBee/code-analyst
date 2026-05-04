@@ -269,6 +269,35 @@ class TeamListResponse(BaseModel):
     teams: list[Team]
 
 
+class TeamSummary(BaseModel):
+    tenant_id: str
+    team_id: str
+    name: str
+    created_at: datetime
+    member_count: int = 0
+
+
+class AdminTeamListResponse(BaseModel):
+    tenant_id: str
+    teams: list[TeamSummary]
+
+
+class TeamMemberRecord(BaseModel):
+    tenant_id: str
+    team_id: str
+    user_email: str
+    name: str | None = None
+    is_admin: bool = False
+    joined_at: datetime
+
+
+class TeamDetailResponse(BaseModel):
+    tenant_id: str
+    team: Team
+    members: list[TeamMemberRecord]
+    repositories: list[RepositoryDefinition]
+
+
 class TeamMemberAddRequest(BaseModel):
     user_email: str
 
@@ -303,6 +332,11 @@ class UserMeResponse(BaseModel):
     email: str
     name: str | None = None
     is_admin: bool = False
+
+
+class UserListResponse(BaseModel):
+    tenant_id: str
+    users: list[User]
 
 
 class RepositoryDefinitionCreateRequest(BaseModel):

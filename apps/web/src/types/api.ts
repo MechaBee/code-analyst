@@ -198,6 +198,35 @@ export interface TeamListResponse {
   teams: Team[];
 }
 
+export interface TeamSummary {
+  tenant_id: string;
+  team_id: string;
+  name: string;
+  created_at: string;
+  member_count: number;
+}
+
+export interface AdminTeamListResponse {
+  tenant_id: string;
+  teams: TeamSummary[];
+}
+
+export interface TeamMemberRecord {
+  tenant_id: string;
+  team_id: string;
+  user_email: string;
+  name?: string | null;
+  is_admin: boolean;
+  joined_at: string;
+}
+
+export interface TeamDetailResponse {
+  tenant_id: string;
+  team: Team;
+  members: TeamMemberRecord[];
+  repositories: RepositoryDefinition[];
+}
+
 export interface TeamMemberAddRequest {
   user_email: string;
 }
@@ -232,6 +261,11 @@ export interface UserMeResponse {
   email: string;
   name?: string | null;
   is_admin: boolean;
+}
+
+export interface UserListResponse {
+  tenant_id: string;
+  users: User[];
 }
 
 export interface RepositoryDefinitionCreateRequest {
