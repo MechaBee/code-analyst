@@ -73,6 +73,11 @@ class ConversationCreateResponse(BaseModel):
     status: Status = Status.OPEN
 
 
+class ConversationUpdateRequest(BaseModel):
+    title: str | None = None
+    pinned: bool | None = None
+
+
 class QuestionRequest(BaseModel):
     message: str
     workspace_snapshot_id: str | None = None
@@ -384,6 +389,8 @@ class ConversationHead(BaseModel):
     latest_run_id: str | None = None
     active_sandbox_id: str | None = None
     latest_snapshot_id: str | None = None
+    pinned_at: datetime | None = None
+    deleted_at: datetime | None = None
 
 
 class ConversationListResponse(BaseModel):

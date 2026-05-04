@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from code_analyst_contracts import (
@@ -17,6 +18,7 @@ from code_analyst_contracts import (
     ConversationEvent,
     ConversationHead,
     ConversationListResponse,
+    ConversationUpdateRequest,
     HealthResponse,
     QuestionRequest,
     QuestionResponse,
@@ -192,6 +194,7 @@ async def create_conversation(
 async def list_conversations(
     request: Request,
     repo_def_id: str | None = None,
+    checkout_id: str | None = None,
 ) -> ConversationListResponse:
     principal = await ensure_user(request)
     conversations = await run_in_threadpool(
@@ -199,6 +202,7 @@ async def list_conversations(
         tenant_id=principal.tenant_id,
         principal_email=principal.email,
         repo_def_id=repo_def_id,
+        checkout_id=checkout_id,
     )
     return ConversationListResponse(
         tenant_id=principal.tenant_id,
@@ -221,6 +225,66 @@ async def get_conversation(
     if conversation.principal_email != principal.email:
         raise HTTPException(status_code=403, detail="Access denied to this conversation.")
     return conversation
+
+
+@app.patch("/v1/conversations/{conversation_id}", response_model=ConversationHead)
+async def update_conversation(
+    request: Request,
+    conversation_id: str,
+    body: ConversationUpdateRequest,
+) -> ConversationHead:
+    principal = await ensure_user(request)
+    conversation = await run_in_threadpool(
+        app.state.state.conversation_store.get_conversation,
+        conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    if conversation.principal_email != principal.email:
+        raise HTTPException(status_code=403, detail="Access denied to this conversation.")
+
+    updates: dict[str, object] = {}
+    if "title" in body.model_fields_set:
+        normalized_title = body.title.strip() if body.title is not None else None
+        updates["title"] = normalized_title or None
+    if "pinned" in body.model_fields_set:
+        updates["pinned_at"] = (
+            datetime.now(timezone.utc) if body.pinned else None
+        )
+
+    if not updates:
+        return conversation
+
+    return await run_in_threadpool(
+        app.state.state.conversation_store.update_head,
+        conversation_id,
+        **updates,
+    )
+
+
+@app.delete("/v1/conversations/{conversation_id}", response_model=ConversationHead)
+async def delete_conversation(
+    request: Request,
+    conversation_id: str,
+) -> ConversationHead:
+    principal = await ensure_user(request)
+    conversation = await run_in_threadpool(
+        app.state.state.conversation_store.get_conversation,
+        conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    if conversation.principal_email != principal.email:
+        raise HTTPException(status_code=403, detail="Access denied to this conversation.")
+
+    return await run_in_threadpool(
+        app.state.state.conversation_store.update_head,
+        conversation_id,
+        status="DELETED",
+        deleted_at=datetime.now(timezone.utc),
+        pinned_at=None,
+        active_sandbox_id=None,
+    )
 
 
 @app.get(

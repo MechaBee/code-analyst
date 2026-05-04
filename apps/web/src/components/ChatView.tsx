@@ -13,10 +13,7 @@ export default function ChatView() {
   const {
     messages,
     conversationId,
-    workspaceId,
     snapshotId,
-    repoDefId,
-    checkoutId,
     isLoading,
     pendingApproval,
     chatError,
@@ -30,12 +27,9 @@ export default function ChatView() {
 
   const api = useApi();
   const { subscribe } = useRunEvents();
-  const inputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [inputValue, setInputValue] = React.useState('');
-  const currentRunIdRef = useRef<string | null>(null);
-  const [repoLabel, setRepoLabel] = React.useState<string | null>(null);
-  const [branchLabel, setBranchLabel] = React.useState<string | null>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -44,100 +38,66 @@ export default function ChatView() {
   }, [messages, isLoading]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadConversationContext() {
-      if (!repoDefId) {
-        setRepoLabel(null);
-        setBranchLabel(null);
-        return;
-      }
-
-      try {
-        const repo = await api.getRepoDefinition(repoDefId);
-        if (!cancelled) {
-          setRepoLabel(repo.name || repo.endpoint);
-        }
-      } catch {
-        if (!cancelled) {
-          setRepoLabel(repoDefId);
-        }
-      }
-
-      if (!checkoutId) {
-        setBranchLabel(null);
-        return;
-      }
-
-      try {
-        const checkout = await api.getCheckout(checkoutId);
-        if (!cancelled) {
-          setBranchLabel(checkout.branch);
-        }
-      } catch {
-        if (!cancelled) {
-          setBranchLabel(null);
-        }
-      }
+    const composer = composerRef.current;
+    if (!composer) {
+      return;
     }
 
-    loadConversationContext();
+    composer.style.height = '0px';
+    composer.style.height = `${Math.min(composer.scrollHeight, 160)}px`;
+  }, [inputValue]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [api, repoDefId, checkoutId]);
+  const handleEventSubscription = useCallback(
+    (runId: string) => {
+      subscribe(runId, {
+        onProgress: (event: RunEvent) => {
+          const msg = event.payload.message;
+          if (msg) {
+            appendToLastAssistant(`\n\n> ${msg}`);
+          }
+        },
+        onApproval: (event: RunEvent) => {
+          setPendingApproval({
+            runId,
+            approvalId: event.payload.approval_id || '',
+            message: event.payload.message || 'Approval required',
+          });
+          setIsLoading(false);
+        },
+        onCompleted: (event: RunEvent) => {
+          const answer = event.payload.answer_markdown || '';
+          const citations = (event.payload.citations || []) as EvidenceRef[];
+          const followups = (event.payload.followups || []) as string[];
 
-  const handleEventSubscription = useCallback((runId: string) => {
-    currentRunIdRef.current = runId;
-
-    subscribe(runId, {
-      onProgress: (event: RunEvent) => {
-        const msg = event.payload.message;
-        if (msg) {
-          appendToLastAssistant(`\n\n> ${msg}`);
-        }
-      },
-      onApproval: (event: RunEvent) => {
-        setPendingApproval({
-          runId,
-          approvalId: event.payload.approval_id || '',
-          message: event.payload.message || 'Approval required',
-        });
-        setIsLoading(false);
-      },
-      onCompleted: (event: RunEvent) => {
-        const answer = event.payload.answer_markdown || '';
-        const citations = (event.payload.citations || []) as EvidenceRef[];
-        const followups = (event.payload.followups || []) as string[];
-
-        updateLastAssistantMessage((msg: Message) => ({
-          ...msg,
-          content: answer,
-          isLoading: false,
-          citations,
-          followups,
-        }));
-        setIsLoading(false);
-        setPendingApproval(null);
-      },
-      onFailed: (event: RunEvent) => {
-        const message = event.payload.message || 'Run failed';
-        updateLastAssistantMessage((msg: Message) => ({
-          ...msg,
-          content: `**Error:** ${message}`,
-          isLoading: false,
-          error: true,
-        }));
-        setIsLoading(false);
-        setPendingApproval(null);
-      },
-      onError: () => {
-        // SSE connection closed after replay ends
-        setIsLoading(false);
-      },
-    });
-  }, [subscribe, appendToLastAssistant, updateLastAssistantMessage, setPendingApproval, setIsLoading]);
+          updateLastAssistantMessage((msg: Message) => ({
+            ...msg,
+            content: answer,
+            isLoading: false,
+            citations,
+            followups,
+          }));
+          setIsLoading(false);
+          setPendingApproval(null);
+        },
+        onFailed: (event: RunEvent) => {
+          const message = event.payload.message || 'Run failed';
+          updateLastAssistantMessage((msg: Message) => ({
+            ...msg,
+            content: `**Error:** ${message}`,
+            isLoading: false,
+            error: true,
+          }));
+          setIsLoading(false);
+          setPendingApproval(null);
+        },
+        onError: () => {
+          // SSE connection closed after replay ends
+          setIsLoading(false);
+        },
+      });
+    },
+    [subscribe, appendToLastAssistant, updateLastAssistantMessage, setPendingApproval, setIsLoading]
+  );
 
   const handleSend = useCallback(async () => {
     if (!inputValue.trim() || !conversationId || isLoading || pendingApproval) return;
@@ -244,39 +204,18 @@ export default function ChatView() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-cream">
-      {/* Header */}
-      <header className="flex items-center justify-between border-b border-line bg-panel px-6 py-3">
-        <div className="flex items-center gap-3">
-          <div className="h-8 w-8 rounded-lg bg-accent" />
-          <div>
-            <h1 className="text-base font-semibold text-ink">Code Analyst</h1>
-            {(repoLabel || repoDefId || branchLabel || checkoutId) && (
-              <div className="text-xs text-muted">
-                {(repoLabel || repoDefId) && <span>Repo: {repoLabel || repoDefId} </span>}
-                {branchLabel ? (
-                  <span>• Branch: {branchLabel}</span>
-                ) : (
-                  checkoutId && <span>• Checkout: {checkoutId.slice(0, 12)}…</span>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="text-xs text-muted">
-          {workspaceId ? `Workspace: ${workspaceId.slice(0, 12)}…` : 'No workspace'}
-        </div>
-      </header>
-
-      {/* Messages */}
       <div
         ref={scrollRef}
         className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6"
       >
-        <div className="mx-auto flex max-w-3xl flex-col gap-5">
+        <div className="mx-auto flex max-w-4xl flex-col gap-5">
           {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-20 text-center text-muted">
+            <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-line bg-panel/40 px-6 py-20 text-center text-muted">
               <p className="text-lg font-medium text-ink">Ready to analyze</p>
-              <p className="mt-1 text-sm">Ask a question about the imported repository.</p>
+              <p className="mt-2 max-w-xl text-sm">
+                Ask for architecture walkthroughs, code tracing, debugging help, refactors, or
+                implementation plans for this checkout.
+              </p>
             </div>
           )}
           {messages.map((msg) => (
@@ -295,45 +234,49 @@ export default function ChatView() {
         </div>
       </div>
 
-      {/* Input */}
       <div className="border-t border-line bg-panel px-4 py-4 sm:px-6">
-        <div className="mx-auto flex max-w-3xl gap-3">
-          <input
-            ref={inputRef}
-            type="text"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isLoading || !!pendingApproval}
-            placeholder={
-              pendingApproval
-                ? 'Waiting for approval...'
-                : isLoading
-                ? 'Thinking...'
-                : 'Ask a question about the codebase...'
-            }
-            className={cn(
-              'flex-1 rounded-xl border bg-cream px-4 py-3 text-sm text-ink outline-none transition',
-              'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
-              (isLoading || pendingApproval) && 'cursor-not-allowed opacity-60',
-              chatError ? 'border-red-400' : 'border-line'
-            )}
-          />
-          <button
-            onClick={handleSend}
-            disabled={isLoading || !!pendingApproval || !inputValue.trim()}
-            className={cn(
-              'rounded-xl px-5 py-3 text-sm font-semibold text-white transition',
-              isLoading || !!pendingApproval || !inputValue.trim()
-                ? 'cursor-not-allowed bg-accent/60'
-                : 'bg-accent hover:bg-accent/90 active:scale-[0.98]'
-            )}
-          >
-            Send
-          </button>
+        <div className="mx-auto max-w-4xl">
+          <div className="rounded-3xl border border-line bg-cream p-3 shadow-sm">
+            <textarea
+              ref={composerRef}
+              aria-label="Message composer"
+              rows={1}
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={isLoading || !!pendingApproval}
+              placeholder={
+                pendingApproval
+                  ? 'Waiting for approval...'
+                  : isLoading
+                  ? 'Thinking...'
+                  : 'Ask a question about the codebase, request a change, or ask for a walkthrough...'
+              }
+              className={cn(
+                'max-h-40 min-h-[56px] w-full resize-none bg-transparent px-3 py-2 text-sm text-ink outline-none transition',
+                'placeholder:text-muted/60',
+                (isLoading || pendingApproval) && 'cursor-not-allowed opacity-60'
+              )}
+            />
+            <div className="mt-3 flex items-center justify-between gap-3 border-t border-line pt-3">
+              <p className="text-xs text-muted">Enter to send, Shift+Enter for a new line.</p>
+              <button
+                onClick={handleSend}
+                disabled={isLoading || !!pendingApproval || !inputValue.trim()}
+                className={cn(
+                  'rounded-2xl px-5 py-2.5 text-sm font-semibold text-white transition',
+                  isLoading || !!pendingApproval || !inputValue.trim()
+                    ? 'cursor-not-allowed bg-accent/60'
+                    : 'bg-accent hover:bg-accent/90 active:scale-[0.98]'
+                )}
+              >
+                Send
+              </button>
+            </div>
+          </div>
         </div>
         {chatError && (
-          <div className="mx-auto mt-2 max-w-3xl text-xs text-red-600">
+          <div className="mx-auto mt-2 max-w-4xl text-xs text-red-600">
             {chatError}
           </div>
         )}

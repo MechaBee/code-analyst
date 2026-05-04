@@ -191,6 +191,35 @@ def test_conversation_scoping_flow(
     filtered = filtered_resp.json()["conversations"]
     assert all(c["repo_def_id"] == repo_def_id for c in filtered)
 
+    # Create a second checkout and conversation, then verify checkout-level filtering.
+    second_checkout_resp = client.post(
+        f"/v1/repos/{repo_def_id}/checkouts",
+        json={"repo_def_id": repo_def_id, "ref": "main"},
+        headers=member_headers,
+    )
+    second_checkout = second_checkout_resp.json()
+    second_conv_resp = client.post(
+        "/v1/conversations",
+        json={
+            "tenant_id": "tenant_test",
+            "repo_def_id": repo_def_id,
+            "checkout_id": second_checkout["checkout_id"],
+            "workspace_id": second_checkout["workspace_id"],
+            "title": "Second Scope Chat",
+        },
+        headers=member_headers,
+    )
+    assert second_conv_resp.status_code == 200
+    second_conv_id = second_conv_resp.json()["conversation_id"]
+
+    checkout_filtered_resp = client.get(
+        f"/v1/conversations?repo_def_id={repo_def_id}&checkout_id={checkout_id}",
+        headers=member_headers,
+    )
+    assert checkout_filtered_resp.status_code == 200
+    checkout_filtered = checkout_filtered_resp.json()["conversations"]
+    assert [c["conversation_id"] for c in checkout_filtered] == [conv_id]
+
     # Verify conversation S3 path structure
     conv_head_key = (
         f"tenants/tenant_test/conversations/member@test.com/"
@@ -212,6 +241,39 @@ def test_conversation_scoping_flow(
     # Attempt to access conversation directly as other user — 403
     other_get = client.get(f"/v1/conversations/{conv_id}", headers=other_headers)
     assert other_get.status_code == 403
+
+    # Rename and pin the original conversation.
+    update_resp = client.patch(
+        f"/v1/conversations/{conv_id}",
+        json={"title": "Renamed Analysis Chat", "pinned": True},
+        headers=member_headers,
+    )
+    assert update_resp.status_code == 200
+    updated_head = update_resp.json()
+    assert updated_head["title"] == "Renamed Analysis Chat"
+    assert updated_head["pinned_at"] is not None
+
+    # Delete it softly, verify it disappears from normal reads and listings.
+    delete_resp = client.delete(f"/v1/conversations/{conv_id}", headers=member_headers)
+    assert delete_resp.status_code == 200
+    deleted_head = delete_resp.json()
+    assert deleted_head["status"] == "DELETED"
+    assert deleted_head["deleted_at"] is not None
+
+    deleted_get = client.get(f"/v1/conversations/{conv_id}", headers=member_headers)
+    assert deleted_get.status_code == 404
+
+    list_after_delete = client.get(
+        f"/v1/conversations?repo_def_id={repo_def_id}",
+        headers=member_headers,
+    )
+    assert list_after_delete.status_code == 200
+    assert [c["conversation_id"] for c in list_after_delete.json()["conversations"]] == [
+        second_conv_id
+    ]
+
+    obj_after_delete = object_store.download_json(conv_head_key)
+    assert obj_after_delete["deleted_at"] is not None
 
 
 @mock_aws

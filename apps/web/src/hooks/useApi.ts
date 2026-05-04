@@ -12,6 +12,7 @@ import type {
   ConversationEvent,
   ConversationHead,
   ConversationListResponse,
+  ConversationUpdateRequest,
   HealthResponse,
   QuestionRequest,
   QuestionResponse,
@@ -78,12 +79,21 @@ export function useApi() {
           method: 'POST',
           body: JSON.stringify(req),
         }),
-      listConversations: (repoDefId?: string) =>
+      listConversations: (repoDefId?: string, checkoutId?: string) =>
         apiFetch<ConversationListResponse>(
-          repoDefId ? `/v1/conversations?repo_def_id=${repoDefId}` : '/v1/conversations'
+          `/v1/conversations${buildConversationQuery(repoDefId, checkoutId)}`
         ),
       getConversation: (conversationId: string) =>
         apiFetch<ConversationHead>(`/v1/conversations/${conversationId}`),
+      updateConversation: (conversationId: string, req: ConversationUpdateRequest) =>
+        apiFetch<ConversationHead>(`/v1/conversations/${conversationId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(req),
+        }),
+      deleteConversation: (conversationId: string) =>
+        apiFetch<ConversationHead>(`/v1/conversations/${conversationId}`, {
+          method: 'DELETE',
+        }),
       listConversationEvents: (conversationId: string) =>
         apiFetch<ConversationEvent[]>(`/v1/conversations/${conversationId}/events`),
       askQuestion: (conversationId: string, req: QuestionRequest) =>
@@ -153,4 +163,12 @@ export function useApi() {
     }),
     []
   );
+}
+
+function buildConversationQuery(repoDefId?: string, checkoutId?: string): string {
+  const params = new URLSearchParams();
+  if (repoDefId) params.set('repo_def_id', repoDefId);
+  if (checkoutId) params.set('checkout_id', checkoutId);
+  const query = params.toString();
+  return query ? `?${query}` : '';
 }

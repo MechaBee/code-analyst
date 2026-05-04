@@ -188,7 +188,10 @@ class ConversationStateStore:
             )
         except ObjectStoreKeyNotFound:
             return None
-        return ConversationHead.model_validate(payload)
+        head = ConversationHead.model_validate(payload)
+        if head.deleted_at is not None:
+            return None
+        return head
 
     def list_conversations(
         self,
@@ -196,6 +199,7 @@ class ConversationStateStore:
         tenant_id: str,
         principal_email: str,
         repo_def_id: str | None = None,
+        checkout_id: str | None = None,
     ) -> list[ConversationHead]:
         prefix = self._conversation_scope_prefix(
             tenant_id=tenant_id,
@@ -207,7 +211,12 @@ class ConversationStateStore:
         heads: list[ConversationHead] = []
         for key in keys:
             payload = self._object_store.download_json(key)
-            heads.append(ConversationHead.model_validate(payload))
+            head = ConversationHead.model_validate(payload)
+            if head.deleted_at is not None:
+                continue
+            if checkout_id is not None and head.checkout_id != checkout_id:
+                continue
+            heads.append(head)
         return sorted(heads, key=lambda h: h.updated_at, reverse=True)
 
     def append_event(
@@ -272,8 +281,8 @@ class ConversationStateStore:
         if head is None:
             return []
         prefix = (
-            f"tenants/{head.tenant_id}/conversations/{head.principal_email}/"
-            f"{head.repo_def_id}/{conversation_id}/events/"
+            f"{self._conversation_scope_prefix(tenant_id=head.tenant_id, principal_email=head.principal_email, repo_def_id=head.repo_def_id)}"
+            f"{conversation_id}/events/"
         )
         keys = sorted(self._object_store.list_keys(prefix))
         events: list[ConversationEvent] = []

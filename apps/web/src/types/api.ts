@@ -36,6 +36,11 @@ export interface ConversationCreateResponse {
   status: string;
 }
 
+export interface ConversationUpdateRequest {
+  title?: string | null;
+  pinned?: boolean;
+}
+
 export interface ConversationHead {
   conversation_id: string;
   tenant_id: string;
@@ -51,6 +56,8 @@ export interface ConversationHead {
   latest_run_id?: string | null;
   active_sandbox_id?: string | null;
   latest_snapshot_id?: string | null;
+  pinned_at?: string | null;
+  deleted_at?: string | null;
 }
 
 export interface ConversationListResponse {
