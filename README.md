@@ -23,11 +23,22 @@ The current implementation is focused on GitHub repositories. The repository mod
 
 ## How It Works
 
+### Analysis Flow
+
 1. An admin adds a repository and chooses its access mode.
 2. A user creates a checkout for a branch or ref.
 3. The control plane clones the repository and records a workspace snapshot.
 4. The sandbox supervisor materializes that snapshot in an isolated workspace.
 5. The user asks questions and receives cited answers grounded in the checked-out code.
+
+### Organization and Access Model
+
+- Each tenant has admins, users, teams, and repository definitions.
+- Admins create teams, invite users, and can assign teams during onboarding.
+- Repositories are attached to one or more teams when they are created, and team access can be updated later.
+- Non-admin users only see and use repositories assigned to at least one of their teams.
+- Admins can access all repositories regardless of team assignment.
+- The same repository access rules are enforced for repository listing, checkout creation, checkout visibility, and conversation creation.
 
 ## Quick Start
 
