@@ -4,6 +4,10 @@ Code Analyst is a self-hosted GitHub repository analysis app wrapping [Claude Ag
 
 The current implementation is focused on GitHub repositories. The repository model is designed to expand to additional providers over time, including GitLab.
 
+## App Preview
+
+![Code Analyst conversation view showing a grounded answer with linked source preview](docs/images/app-preview-conversation-source-pane.png)
+
 ## What It Does
 
 - Register repositories for analysis
