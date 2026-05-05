@@ -508,7 +508,7 @@ Keep these or evolve them. The existing aesthetic is warm, calm, and professiona
 | `services/control-plane/control_plane_app/main.py` | FastAPI routes |
 | `services/control-plane/control_plane_app/question_orchestrator.py` | Run lifecycle (setup → approval → execute) |
 | `services/control-plane/control_plane_app/state_store.py` | S3-backed persistence for conversations, runs, approvals |
-| `packages/contracts-python/src/code_analyst_contracts/contracts.py` | All Pydantic models / API types |
+| `packages/contracts/python/src/code_analyst_contracts/contracts.py` | All Pydantic models / API types |
 | `tests/integration/test_question_orchestration.py` | Integration tests showing the full flow |
 
 ## One-Sentence Reminder

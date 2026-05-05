@@ -9,7 +9,7 @@ WORKDIR /workspace
 
 RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
 
-COPY packages/contracts-python /workspace/packages/contracts-python
+COPY packages/contracts/python /workspace/packages/contracts/python
 COPY services/sandbox-supervisor /workspace/services/sandbox-supervisor
 
 WORKDIR /workspace/services/sandbox-supervisor

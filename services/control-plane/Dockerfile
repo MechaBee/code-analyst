@@ -13,7 +13,7 @@ RUN apt-get update \
 
 RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
 
-COPY packages/contracts-python /workspace/packages/contracts-python
+COPY packages/contracts/python /workspace/packages/contracts/python
 COPY services/control-plane /workspace/services/control-plane
 
 WORKDIR /workspace/services/control-plane

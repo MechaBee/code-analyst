@@ -400,7 +400,7 @@ pydantic = ">=2.7,<3.0"
 
 [package.source]
 type = "directory"
-url = "packages/contracts-python"
+url = "packages/contracts/python"
 
 [[package]]
 name = "code-analyst-control-plane"
@@ -414,7 +414,7 @@ develop = true
 
 [package.dependencies]
 boto3 = "^1.38.0"
-code-analyst-contracts = {path = "../../packages/contracts-python", develop = true}
+code-analyst-contracts = {path = "../../packages/contracts/python", develop = true}
 fastapi = ">=0.115,<1.0"
 httpx = "^0.28.1"
 pydantic-settings = ">=2.3,<3.0"
@@ -438,7 +438,7 @@ develop = true
 [package.dependencies]
 boto3 = "^1.38.0"
 claude-agent-sdk = "^0.1.68"
-code-analyst-contracts = {path = "../../packages/contracts-python", develop = true}
+code-analyst-contracts = {path = "../../packages/contracts/python", develop = true}
 fastapi = ">=0.115,<1.0"
 openai-agents = "^0.14.2"
 pydantic-settings = ">=2.3,<3.0"
@@ -2413,4 +2413,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "3.11.11"
-content-hash = "8d2fc23e7e63cc3fbc79dbb820cef5f7b1ba695a8c9e21b113242aa817d9c779"
+content-hash = "77c4adae9b533feb724cf45b9e4e698871fd22356069955df99a18e83e70147a"

@@ -16,11 +16,10 @@ node_modules/
 dist/
 build/
 .mypy_cache/
-minio-data/
+.local/
 
 *.egg-info/
 .coverage
 htmlcov/
 *.log
 .secrets/
-control-plane-data/

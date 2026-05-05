@@ -14,7 +14,7 @@ fastapi = ">=0.115,<1.0"
 openai-agents = "^0.14.2"
 pydantic-settings = ">=2.3,<3.0"
 uvicorn = { extras = ["standard"], version = ">=0.30,<1.0" }
-code-analyst-contracts = { path = "../../packages/contracts-python", develop = true }
+code-analyst-contracts = { path = "../../packages/contracts/python", develop = true }
 zstandard = "^0.23.0"
 
 [build-system]

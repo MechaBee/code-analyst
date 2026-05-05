@@ -8,7 +8,7 @@ package-mode = false
 
 [tool.poetry.dependencies]
 python = "3.11.11"
-code-analyst-contracts = { path = "packages/contracts-python", develop = true }
+code-analyst-contracts = { path = "packages/contracts/python", develop = true }
 code-analyst-control-plane = { path = "services/control-plane", develop = true }
 code-analyst-sandbox-supervisor = { path = "services/sandbox-supervisor", develop = true }
 

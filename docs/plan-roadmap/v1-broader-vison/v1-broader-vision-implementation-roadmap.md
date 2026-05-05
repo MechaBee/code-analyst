@@ -2,14 +2,14 @@
 
 ## Context
 
-The MVP (captured in `documentation/plan-roadmap/local-first-mvp/local-first-implementation-roadmap.md`) has validated four core subsystems:
+The MVP (captured in `docs/plan-roadmap/local-first-mvp/local-first-implementation-roadmap.md`) has validated four core subsystems:
 
 1. **Workspace Store** — immutable snapshots from GitHub
 2. **Conversation Store** — append-only event log with materialized head
 3. **Agent Orchestrator** — FastAPI service driving sandbox sessions
 4. **Sandbox Pool** — Docker-based worker provisioning and execution
 
-This document defines the next implementation phase to align the MVP with the broader vision described in `documentation/envisioned-operations.md`.
+This document defines the next implementation phase to align the MVP with the broader vision described in `docs/envisioned-operations.md`.
 
 The vision introduces:
 
@@ -335,7 +335,7 @@ A new `AuthProvider` will wrap the app:
 
 **Backend Deliverables:**
 
-1. `packages/contracts-python/src/code_analyst_contracts/contracts.py`
+1. `packages/contracts/python/src/code_analyst_contracts/contracts.py`
     - Add `User`, `Team`, `TeamMembership`, `RepositoryDefinition`, `RepositoryAdapter` models.
    - Add request/response models for admin and repo endpoints.
 
@@ -390,7 +390,7 @@ A new `AuthProvider` will wrap the app:
 
 **Backend Deliverables:**
 
-1. `packages/contracts-python/src/code_analyst_contracts/contracts.py`
+1. `packages/contracts/python/src/code_analyst_contracts/contracts.py`
    - Add `Checkout`, `CheckoutCreateRequest`, `CheckoutCreateResponse`, `CheckoutListResponse`.
    - Update `WorkspaceImportRequest` to optionally accept `repo_def_id` instead of raw `repo_url`.
 
@@ -439,7 +439,7 @@ A new `AuthProvider` will wrap the app:
 
 **Backend Deliverables:**
 
-1. `packages/contracts-python/src/code_analyst_contracts/contracts.py`
+1. `packages/contracts/python/src/code_analyst_contracts/contracts.py`
    - Update `ConversationCreateRequest` to include `repo_def_id` and optional `checkout_id`.
    - Update `ConversationHead` model (see Entity Model).
 
@@ -492,7 +492,7 @@ A new `AuthProvider` will wrap the app:
 
 **Backend Deliverables:**
 
-1. `packages/contracts-python/src/code_analyst_contracts/contracts.py`
+1. `packages/contracts/python/src/code_analyst_contracts/contracts.py`
    - Update `SandboxSessionCreateRequest` to accept `checkout_id` instead of just `workspace` (or include both).
    - Add `SandboxSession` model to track sandbox-to-checkout mapping.
 
