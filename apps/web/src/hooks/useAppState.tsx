@@ -26,7 +26,7 @@ interface AppStateContextValue extends AppState {
   replaceMessages: (messages: Message[]) => void;
   addMessage: (message: Message) => void;
   updateLastAssistantMessage: (updater: (msg: Message) => Message) => void;
-  appendToLastAssistant: (text: string) => void;
+  appendStatusUpdateToLastAssistant: (status: string) => void;
   setCitationsForLastAssistant: (citations: EvidenceRef[], followups: string[]) => void;
   setPendingApproval: (approval: AppState['pendingApproval']) => void;
   setIsLoading: (loading: boolean) => void;
@@ -87,10 +87,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const appendToLastAssistant = useCallback((text: string) => {
+  const appendStatusUpdateToLastAssistant = useCallback((status: string) => {
     updateLastAssistantMessage((msg) => ({
       ...msg,
-      content: msg.content + text,
+      statusUpdates:
+        msg.statusUpdates && msg.statusUpdates[msg.statusUpdates.length - 1] === status
+          ? msg.statusUpdates
+          : [...(msg.statusUpdates ?? []), status],
     }));
   }, [updateLastAssistantMessage]);
 
@@ -133,7 +136,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         replaceMessages,
         addMessage,
         updateLastAssistantMessage,
-        appendToLastAssistant,
+        appendStatusUpdateToLastAssistant,
         setCitationsForLastAssistant,
         setPendingApproval,
         setIsLoading,

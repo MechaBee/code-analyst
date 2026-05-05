@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ChatView from '@/components/ChatView';
 import ConfirmDialog from '@/components/ConfirmDialog';
@@ -18,6 +18,8 @@ import type {
   Message,
   RepositoryDefinition,
 } from '@/types/api';
+
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'chat.sidebar.collapsed';
 
 function hydrateMessages(events: ConversationEvent[]): Message[] {
   return events.reduce<Message[]>((messages, event) => {
@@ -69,19 +71,38 @@ export default function ChatPage() {
   } = useAppState();
 
   const conversationId = params.conversationId;
+  const autoTitleRequestedForRef = useRef<string | null>(null);
+
   const [conversation, setConversation] = useState<ConversationHead | null>(null);
   const [scopedConversations, setScopedConversations] = useState<ConversationHead[]>([]);
   const [repo, setRepo] = useState<RepositoryDefinition | null>(null);
   const [checkout, setCheckout] = useState<Checkout | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false);
   const [isCreatingConversation, setIsCreatingConversation] = useState(false);
   const [mutatingConversationId, setMutatingConversationId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ConversationHead | null>(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [isNavigating, startNavigation] = useTransition();
+
+  useEffect(() => {
+    const storedValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
+    setDesktopSidebarCollapsed(storedValue === 'true');
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      SIDEBAR_COLLAPSED_STORAGE_KEY,
+      desktopSidebarCollapsed ? 'true' : 'false'
+    );
+  }, [desktopSidebarCollapsed]);
+
+  useEffect(() => {
+    autoTitleRequestedForRef.current = null;
+  }, [conversationId]);
 
   useEffect(() => {
     if (!conversationId) {
@@ -94,7 +115,7 @@ export default function ChatPage() {
       try {
         setPageLoading(true);
         setPageError(null);
-        setSidebarOpen(false);
+        setMobileSidebarOpen(false);
         setDeleteTarget(null);
         setIsEditingTitle(false);
         setConversation(null);
@@ -233,9 +254,20 @@ export default function ChatPage() {
     }).format(new Date(conversation.created_at));
   }, [conversation]);
 
+  const metadataLine = useMemo(() => {
+    const parts = [
+      repoLabel,
+      branchLabel,
+      isRepoArchived ? 'Archived' : null,
+      createdLabel ? `Created ${createdLabel}` : null,
+    ].filter((value): value is string => Boolean(value));
+
+    return parts.join(' · ');
+  }, [branchLabel, createdLabel, isRepoArchived, repoLabel]);
+
   const routeToConversation = useCallback(
     (nextConversationId: string, replaceHistory: boolean = false) => {
-      setSidebarOpen(false);
+      setMobileSidebarOpen(false);
       setDeleteTarget(null);
       setIsEditingTitle(false);
       setPageLoading(true);
@@ -288,7 +320,7 @@ export default function ChatPage() {
   const handleSelectConversation = useCallback(
     (target: ConversationHead) => {
       if (target.conversation_id === conversationId) {
-        setSidebarOpen(false);
+        setMobileSidebarOpen(false);
         return;
       }
 
@@ -401,6 +433,31 @@ export default function ChatPage() {
     scopedConversations,
   ]);
 
+  const handleAutoTitleCandidate = useCallback(
+    async (candidate: string) => {
+      if (!conversation) {
+        return;
+      }
+      if (conversation.title?.trim()) {
+        return;
+      }
+      if (autoTitleRequestedForRef.current === conversation.conversation_id) {
+        return;
+      }
+
+      autoTitleRequestedForRef.current = conversation.conversation_id;
+      try {
+        const updated = await api.updateConversation(conversation.conversation_id, {
+          title: buildAutoTitle(candidate),
+        });
+        applyConversationUpdate(updated);
+      } catch {
+        autoTitleRequestedForRef.current = null;
+      }
+    },
+    [api, applyConversationUpdate, conversation]
+  );
+
   return (
     <div className="flex h-screen overflow-hidden bg-cream">
       <ConversationSidebar
@@ -409,14 +466,16 @@ export default function ChatPage() {
         currentConversationId={conversationId}
         conversations={scopedConversations}
         isCreatingConversation={isCreatingConversation}
-        isOpen={sidebarOpen}
+        mobileOpen={mobileSidebarOpen}
+        desktopCollapsed={desktopSidebarCollapsed}
         busyConversationId={mutatingConversationId}
-        onClose={() => setSidebarOpen(false)}
+        onCloseMobile={() => setMobileSidebarOpen(false)}
         onCreateConversation={handleCreateConversation}
         onDeleteConversation={handleDeleteConversation}
         onRenameConversation={handleRenameConversation}
         onSelectConversation={handleSelectConversation}
         onTogglePinConversation={handleTogglePinConversation}
+        onToggleDesktopCollapsed={() => setDesktopSidebarCollapsed((current) => !current)}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -432,7 +491,7 @@ export default function ChatPage() {
               </Link>
               <button
                 type="button"
-                onClick={() => setSidebarOpen(true)}
+                onClick={() => setMobileSidebarOpen(true)}
                 className="rounded-2xl border border-line bg-cream p-2.5 text-muted transition hover:border-accent/20 hover:text-ink md:hidden"
                 aria-label="Open conversations sidebar"
               >
@@ -488,59 +547,40 @@ export default function ChatPage() {
               ) : (
                 <>
                   <div className="flex items-center gap-2">
-                    <h1 className="truncate text-lg font-semibold text-ink sm:text-xl">
+                    <h1 className="truncate text-xl font-semibold text-ink sm:text-[2rem]">
                       {conversation ? getConversationDisplayTitle(conversation) : 'Loading conversation'}
                     </h1>
+                    {conversation && (
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingTitle(true)}
+                        className="rounded-xl p-2 text-muted transition hover:bg-cream hover:text-ink"
+                        aria-label="Rename conversation"
+                      >
+                        <EditIcon />
+                      </button>
+                    )}
                     {isNavigating && (
                       <span className="rounded-full bg-accent/10 px-2 py-1 text-xs font-medium text-accent">
                         Switching...
                       </span>
                     )}
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
-                    <ScopePill label={repoLabel} />
-                    {isRepoArchived && <ScopePill label="Archived" />}
-                    {branchLabel && <ScopePill label={branchLabel} />}
-                    {createdLabel && <ScopePill label={`Created ${createdLabel}`} />}
-                  </div>
+                  {metadataLine && (
+                    <p className="mt-2 text-sm text-muted">
+                      {metadataLine}
+                    </p>
+                  )}
                 </>
               )}
             </div>
 
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={handleCreateConversation}
-                disabled={!conversation?.repo_def_id || isCreatingConversation || isRepoArchived}
-                className="rounded-2xl border border-line bg-cream px-3 py-2 text-sm font-medium text-ink transition hover:border-accent/20 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                New
-              </button>
-              <button
-                type="button"
-                onClick={() => conversation && void handleTogglePinConversation(conversation)}
-                disabled={!conversation || mutatingConversationId === conversation.conversation_id}
-                className="rounded-2xl border border-line bg-cream px-3 py-2 text-sm font-medium text-ink transition hover:border-accent/20 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {conversation?.pinned_at ? 'Unpin' : 'Pin'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsEditingTitle(true)}
-                disabled={!conversation}
-                className="rounded-2xl border border-line bg-cream px-3 py-2 text-sm font-medium text-ink transition hover:border-accent/20 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Rename
-              </button>
-              <button
-                type="button"
-                onClick={() => conversation && setDeleteTarget(conversation)}
-                disabled={!conversation}
-                className="rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Delete
-              </button>
-            </div>
+            <ConversationActionsMenu
+              conversation={conversation}
+              isBusy={Boolean(conversation && mutatingConversationId === conversation.conversation_id)}
+              onTogglePin={() => conversation && void handleTogglePinConversation(conversation)}
+              onDelete={() => conversation && setDeleteTarget(conversation)}
+            />
           </div>
         </header>
 
@@ -561,7 +601,10 @@ export default function ChatPage() {
               </div>
             </div>
           ) : (
-            <ChatView />
+            <ChatView
+              canAutoTitle={Boolean(conversation && !conversation.title?.trim())}
+              onAutoTitleCandidate={handleAutoTitleCandidate}
+            />
           )}
         </main>
       </div>
@@ -612,11 +655,94 @@ function upsertConversation(
   return [updatedConversation, ...next];
 }
 
-function ScopePill({ label }: { label: string }) {
+function buildAutoTitle(candidate: string): string {
+  const normalized = candidate.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'New conversation';
+  }
+  return normalized.length > 72 ? `${normalized.slice(0, 69).trimEnd()}...` : normalized;
+}
+
+function ConversationActionsMenu({
+  conversation,
+  isBusy,
+  onTogglePin,
+  onDelete,
+}: {
+  conversation: ConversationHead | null;
+  isBusy: boolean;
+  onTogglePin: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    }
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
   return (
-    <span className="rounded-full border border-line bg-cream px-2.5 py-1 text-xs font-medium text-muted">
-      {label}
-    </span>
+    <div className="relative" ref={containerRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        disabled={!conversation}
+        className="rounded-2xl border border-line bg-cream p-2.5 text-muted transition hover:border-accent/20 hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+        aria-label="Conversation actions"
+      >
+        <MoreIcon />
+      </button>
+
+      {open && conversation && (
+        <div className="absolute right-0 top-full z-20 mt-2 min-w-[180px] rounded-2xl border border-line bg-panel p-1.5 shadow-lg">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onTogglePin();
+            }}
+            disabled={isBusy}
+            className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-ink transition hover:bg-cream disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span>{conversation.pinned_at ? 'Unpin conversation' : 'Pin conversation'}</span>
+            <PinMiniIcon />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+            disabled={isBusy}
+            className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span>Delete conversation</span>
+            <TrashMiniIcon />
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -642,6 +768,62 @@ function SidebarIcon() {
         stroke="currentColor"
         strokeWidth="1.5"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden="true">
+      <path
+        d="M13.75 3.75L16.25 6.25M4.583 15.417L7.236 14.887C7.555 14.823 7.848 14.666 8.078 14.436L15.625 6.889C16.316 6.198 16.316 5.077 15.625 4.386L15.614 4.375C14.923 3.684 13.802 3.684 13.111 4.375L5.564 11.922C5.334 12.152 5.177 12.445 5.113 12.764L4.583 15.417Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className="h-5 w-5" aria-hidden="true">
+      <path
+        d="M5 10H5.01M10 10H10.01M15 10H15.01"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function PinMiniIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden="true">
+      <path
+        d="M6.667 4.167H13.333L12.5 8.333L15 10.833V11.667H10.833L10 15.833L9.167 11.667H5V10.833L7.5 8.333L6.667 4.167Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function TrashMiniIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden="true">
+      <path
+        d="M4.167 5.833H15.833M7.5 5.833V4.167C7.5 3.707 7.873 3.333 8.333 3.333H11.667C12.127 3.333 12.5 3.707 12.5 4.167V5.833M6.667 5.833V14.167C6.667 15.087 7.413 15.833 8.333 15.833H11.667C12.587 15.833 13.333 15.087 13.333 14.167V5.833"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );

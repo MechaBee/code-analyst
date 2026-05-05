@@ -179,6 +179,21 @@ class EvidenceRef(BaseModel):
     excerpt_hash: str
 
 
+class CitationPreviewLine(BaseModel):
+    line_number: int
+    content: str
+
+
+class CitationPreviewResponse(BaseModel):
+    snapshot_id: str
+    path: str
+    requested_start_line: int
+    requested_end_line: int
+    preview_start_line: int
+    preview_end_line: int
+    lines: list[CitationPreviewLine] = Field(default_factory=list)
+
+
 class ArtifactRef(BaseModel):
     artifact_id: str
     object_key: str

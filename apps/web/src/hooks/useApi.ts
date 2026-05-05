@@ -5,6 +5,7 @@ import type {
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
   AdminTeamListResponse,
+  CitationPreviewResponse,
   LogoutResponse,
   Checkout,
   CheckoutCreateRequest,
@@ -107,6 +108,23 @@ export function useApi() {
         }),
       listConversationEvents: (conversationId: string) =>
         apiFetch<ConversationEvent[]>(`/v1/conversations/${conversationId}/events`),
+      getCitationPreview: (
+        conversationId: string,
+        params: {
+          snapshotId: string;
+          path: string;
+          startLine: number;
+          endLine: number;
+        }
+      ) =>
+        apiFetch<CitationPreviewResponse>(
+          `/v1/conversations/${conversationId}/citations/preview?${new URLSearchParams({
+            snapshot_id: params.snapshotId,
+            path: params.path,
+            start_line: String(params.startLine),
+            end_line: String(params.endLine),
+          }).toString()}`
+        ),
       askQuestion: (conversationId: string, req: QuestionRequest) =>
         apiFetch<QuestionResponse>(`/v1/conversations/${conversationId}/questions`, {
           method: 'POST',

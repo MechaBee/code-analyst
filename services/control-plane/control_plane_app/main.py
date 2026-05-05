@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import posixpath
+import tarfile
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -12,6 +15,8 @@ from code_analyst_contracts import (
     ApprovalDecisionResponse,
     AdminTeamListResponse,
     BootstrapAdminInvitationRequest,
+    CitationPreviewLine,
+    CitationPreviewResponse,
     Checkout,
     CheckoutCreateRequest,
     CheckoutCreateResponse,
@@ -37,6 +42,7 @@ from code_analyst_contracts import (
     RepositoryDefinitionUpdateRequest,
     RepositoryDefinitionUpdateTeamsRequest,
     RepositoryDefinitionUpdateTeamsResponse,
+    SnapshotManifest,
     SignInConsumeRequest,
     SignInLinkCreateRequest,
     SignInLinkCreateResponse,
@@ -64,6 +70,7 @@ from code_analyst_contracts import (
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
+import zstandard
 
 from .app_state_store import AppStateStore
 from .auth import (
@@ -353,6 +360,62 @@ async def list_conversation_events(
     )
 
 
+@app.get(
+    "/v1/conversations/{conversation_id}/citations/preview",
+    response_model=CitationPreviewResponse,
+)
+async def get_citation_preview(
+    request: Request,
+    conversation_id: str,
+    snapshot_id: str,
+    path: str,
+    start_line: int,
+    end_line: int,
+) -> CitationPreviewResponse:
+    principal = await ensure_user(request)
+    conversation = await run_in_threadpool(
+        app.state.state.conversation_store.get_conversation,
+        conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    if conversation.principal_email != principal.email:
+        raise HTTPException(status_code=403, detail="Access denied to this conversation.")
+
+    try:
+        normalized_path = normalize_citation_preview_path(path)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    snapshot = await run_in_threadpool(
+        app.state.state.workspace_store.get_snapshot,
+        tenant_id=principal.tenant_id,
+        workspace_id=conversation.workspace_id,
+        snapshot_id=snapshot_id,
+    )
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Workspace snapshot not found for this conversation.",
+        )
+
+    try:
+        preview = await run_in_threadpool(
+            build_citation_preview_response,
+            principal.tenant_id,
+            snapshot,
+            normalized_path,
+            start_line,
+            end_line,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    return preview
+
+
 @app.post(
     "/v1/conversations/{conversation_id}/questions",
     response_model=QuestionResponse,
@@ -456,6 +519,94 @@ def raise_for_auth_error(error: AuthError) -> None:
     if isinstance(error, AuthNotFoundError):
         raise HTTPException(status_code=404, detail=str(error)) from error
     raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def normalize_citation_preview_path(path: str) -> str:
+    normalized = posixpath.normpath((path or "").strip())
+    if not normalized or normalized == ".":
+        raise ValueError("Citation path is required.")
+    if normalized.startswith("../") or normalized.startswith("/") or "\\" in normalized:
+        raise ValueError("Citation path must stay within the workspace snapshot.")
+    return normalized
+
+
+def build_citation_preview_response(
+    tenant_id: str,
+    snapshot: "WorkspaceSnapshotRef",
+    path: str,
+    start_line: int,
+    end_line: int,
+) -> CitationPreviewResponse:
+    manifest = load_snapshot_manifest(tenant_id, snapshot)
+    manifest_paths = {entry.path for entry in manifest.files}
+    if path not in manifest_paths:
+        raise FileNotFoundError("Citation file was not found in this workspace snapshot.")
+
+    lines = load_snapshot_text_lines(snapshot, path)
+    if not lines:
+        raise ValueError("Citation preview is unavailable for an empty file.")
+
+    requested_start_line = max(1, start_line)
+    requested_end_line = max(requested_start_line, end_line)
+    safe_start_line = min(requested_start_line, len(lines))
+    safe_end_line = min(max(safe_start_line, requested_end_line), len(lines))
+
+    if safe_end_line - safe_start_line + 1 >= 80:
+        preview_start_line = safe_start_line
+        preview_end_line = min(len(lines), safe_start_line + 79)
+    else:
+        preview_start_line = max(1, safe_start_line - 2)
+        preview_end_line = min(len(lines), safe_end_line + 2)
+        if preview_end_line - preview_start_line + 1 > 80:
+            preview_end_line = min(len(lines), preview_start_line + 79)
+
+    preview_lines = [
+        CitationPreviewLine(line_number=line_number, content=lines[line_number - 1])
+        for line_number in range(preview_start_line, preview_end_line + 1)
+    ]
+
+    return CitationPreviewResponse(
+        snapshot_id=snapshot.snapshot_id,
+        path=path,
+        requested_start_line=requested_start_line,
+        requested_end_line=requested_end_line,
+        preview_start_line=preview_start_line,
+        preview_end_line=preview_end_line,
+        lines=preview_lines,
+    )
+
+
+def load_snapshot_manifest(tenant_id: str, snapshot: "WorkspaceSnapshotRef") -> SnapshotManifest:
+    payload = app.state.state.object_store.download_json(snapshot.manifest_object_key)
+    manifest = SnapshotManifest.model_validate(payload)
+    if (
+        manifest.snapshot_id != snapshot.snapshot_id
+        or manifest.workspace_id != snapshot.workspace_id
+        or manifest.tenant_id != tenant_id
+    ):
+        raise ValueError("Workspace snapshot metadata did not match the requested conversation.")
+    return manifest
+
+
+def load_snapshot_text_lines(snapshot: "WorkspaceSnapshotRef", path: str) -> list[str]:
+    archive_payload = app.state.state.object_store.download_bytes(snapshot.archive_object_key)
+    target_member_name = f"workspace/{path}"
+    decompressor = zstandard.ZstdDecompressor()
+    with decompressor.stream_reader(io.BytesIO(archive_payload)) as archive_stream:
+        with tarfile.open(fileobj=archive_stream, mode="r|") as archive:
+            for member in archive:
+                if member.name != target_member_name:
+                    continue
+                file_handle = archive.extractfile(member)
+                if file_handle is None:
+                    break
+                try:
+                    return file_handle.read().decode("utf-8").splitlines()
+                except UnicodeDecodeError as error:
+                    raise ValueError(
+                        "Citation preview is only available for UTF-8 text files."
+                    ) from error
+    raise FileNotFoundError("Citation file contents could not be loaded from the snapshot.")
 
 
 def normalize_email_or_400(email: str) -> str:

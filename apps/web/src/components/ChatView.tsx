@@ -1,15 +1,21 @@
 'use client';
 
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { useAppState } from '@/hooks/useAppState';
 import MessageBubble from './MessageBubble';
 import ApprovalModal from './ApprovalModal';
+import SourcePreviewDrawer from './SourcePreviewDrawer';
 import { cn, generateId } from '@/lib/utils';
 import { useApi } from '@/hooks/useApi';
 import { useRunEvents } from '@/hooks/useEventSource';
-import type { EvidenceRef, RunEvent, Message } from '@/types/api';
+import type { CitationPreviewResponse, EvidenceRef, RunEvent, Message } from '@/types/api';
 
-export default function ChatView() {
+interface ChatViewProps {
+  canAutoTitle: boolean;
+  onAutoTitleCandidate?: (candidate: string) => void | Promise<void>;
+}
+
+export default function ChatView({ canAutoTitle, onAutoTitleCandidate }: ChatViewProps) {
   const {
     messages,
     conversationId,
@@ -18,7 +24,7 @@ export default function ChatView() {
     pendingApproval,
     chatError,
     addMessage,
-    appendToLastAssistant,
+    appendStatusUpdateToLastAssistant,
     updateLastAssistantMessage,
     setPendingApproval,
     setIsLoading,
@@ -30,6 +36,12 @@ export default function ChatView() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [inputValue, setInputValue] = React.useState('');
+  const [isComposerFocused, setIsComposerFocused] = React.useState(false);
+  const [activeCitationKey, setActiveCitationKey] = React.useState<string | null>(null);
+  const [sourcePreviewOpen, setSourcePreviewOpen] = React.useState(false);
+  const [sourcePreviewLoading, setSourcePreviewLoading] = React.useState(false);
+  const [sourcePreviewError, setSourcePreviewError] = React.useState<string | null>(null);
+  const [sourcePreview, setSourcePreview] = React.useState<CitationPreviewResponse | null>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -44,16 +56,25 @@ export default function ChatView() {
     }
 
     composer.style.height = '0px';
-    composer.style.height = `${Math.min(composer.scrollHeight, 160)}px`;
+    composer.style.height = `${Math.min(composer.scrollHeight, 192)}px`;
   }, [inputValue]);
+
+  useEffect(() => {
+    setInputValue('');
+    setSourcePreviewOpen(false);
+    setSourcePreviewLoading(false);
+    setSourcePreviewError(null);
+    setSourcePreview(null);
+    setActiveCitationKey(null);
+  }, [conversationId]);
 
   const handleEventSubscription = useCallback(
     (runId: string) => {
       subscribe(runId, {
         onProgress: (event: RunEvent) => {
-          const msg = event.payload.message;
-          if (msg) {
-            appendToLastAssistant(`\n\n> ${msg}`);
+          const message = event.payload.message;
+          if (message) {
+            appendStatusUpdateToLastAssistant(message);
           }
         },
         onApproval: (event: RunEvent) => {
@@ -75,6 +96,7 @@ export default function ChatView() {
             isLoading: false,
             citations,
             followups,
+            statusUpdates: [],
           }));
           setIsLoading(false);
           setPendingApproval(null);
@@ -86,72 +108,100 @@ export default function ChatView() {
             content: `**Error:** ${message}`,
             isLoading: false,
             error: true,
+            statusUpdates: [],
           }));
           setIsLoading(false);
           setPendingApproval(null);
         },
         onError: () => {
-          // SSE connection closed after replay ends
           setIsLoading(false);
         },
       });
     },
-    [subscribe, appendToLastAssistant, updateLastAssistantMessage, setPendingApproval, setIsLoading]
+    [appendStatusUpdateToLastAssistant, setIsLoading, setPendingApproval, subscribe, updateLastAssistantMessage]
   );
 
-  const handleSend = useCallback(async () => {
-    if (!inputValue.trim() || !conversationId || isLoading || pendingApproval) return;
+  const sendMessage = useCallback(
+    async (text: string): Promise<boolean> => {
+      const userMessage = text.trim();
+      if (!userMessage || !conversationId || isLoading || pendingApproval) {
+        return false;
+      }
 
-    const userMessage = inputValue.trim();
-    setInputValue('');
-    setChatError(null);
-    setIsLoading(true);
+      const shouldAutoTitle = canAutoTitle && !messages.some((message) => message.role === 'user');
 
-    addMessage({
-      id: generateId('msg'),
-      role: 'user',
-      content: userMessage,
-    });
+      setChatError(null);
+      setIsLoading(true);
 
-    addMessage({
-      id: generateId('msg'),
-      role: 'assistant',
-      content: '',
-      isLoading: true,
-    });
-
-    try {
-      const questionRes = await api.askQuestion(conversationId, {
-        message: userMessage,
-        workspace_snapshot_id: snapshotId,
-        resume_sandbox: true,
-        approval_policy: 'auto',
+      addMessage({
+        id: generateId('msg'),
+        role: 'user',
+        content: userMessage,
       });
 
-      handleEventSubscription(questionRes.run_id);
-    } catch (err) {
-      setChatError(err instanceof Error ? err.message : 'Failed to send question');
-      updateLastAssistantMessage((msg: Message) => ({
-        ...msg,
-        content: '**Error:** Failed to send question',
-        isLoading: false,
-        error: true,
-      }));
-      setIsLoading(false);
+      addMessage({
+        id: generateId('msg'),
+        role: 'assistant',
+        content: '',
+        isLoading: true,
+        statusUpdates: [],
+      });
+
+      try {
+        const questionRes = await api.askQuestion(conversationId, {
+          message: userMessage,
+          workspace_snapshot_id: snapshotId,
+          resume_sandbox: true,
+          approval_policy: 'auto',
+        });
+
+        if (shouldAutoTitle) {
+          void onAutoTitleCandidate?.(userMessage);
+        }
+        handleEventSubscription(questionRes.run_id);
+        return true;
+      } catch (err) {
+        setChatError(err instanceof Error ? err.message : 'Failed to send question');
+        updateLastAssistantMessage((msg: Message) => ({
+          ...msg,
+          content: '**Error:** Failed to send question',
+          isLoading: false,
+          error: true,
+          statusUpdates: [],
+        }));
+        setIsLoading(false);
+        return false;
+      }
+    },
+    [
+      addMessage,
+      api,
+      canAutoTitle,
+      conversationId,
+      handleEventSubscription,
+      isLoading,
+      messages,
+      onAutoTitleCandidate,
+      pendingApproval,
+      setChatError,
+      setIsLoading,
+      snapshotId,
+      updateLastAssistantMessage,
+    ]
+  );
+
+  const handleComposerSend = useCallback(async () => {
+    const draft = inputValue;
+    if (!draft.trim()) {
+      return;
     }
-  }, [
-    inputValue,
-    conversationId,
-    snapshotId,
-    isLoading,
-    pendingApproval,
-    api,
-    handleEventSubscription,
-    addMessage,
-    updateLastAssistantMessage,
-    setChatError,
-    setIsLoading,
-  ]);
+
+    setInputValue('');
+    const sent = await sendMessage(draft);
+    if (!sent) {
+      setInputValue(draft);
+    }
+  }, [inputValue, sendMessage]);
 
   const handleApprovalDecision = useCallback(
     async (decision: 'approve' | 'deny') => {
@@ -167,19 +217,19 @@ export default function ChatView() {
         });
 
         if (decision === 'approve') {
-          // Re-subscribe to events to receive the resumed run's completion
           addMessage({
             id: generateId('msg'),
             role: 'assistant',
-            content: 'Resuming execution…',
+            content: '',
             isLoading: true,
+            statusUpdates: ['Resuming execution...'],
           });
           handleEventSubscription(pendingApproval.runId);
         } else {
           addMessage({
             id: generateId('msg'),
             role: 'assistant',
-            content: `**Denied:** Execution was denied by user.`,
+            content: '**Denied:** Execution was denied by user.',
             isLoading: false,
             error: true,
           });
@@ -192,13 +242,46 @@ export default function ChatView() {
         setIsLoading(false);
       }
     },
-    [pendingApproval, api, handleEventSubscription, addMessage, setPendingApproval, setIsLoading, setChatError]
+    [addMessage, api, handleEventSubscription, pendingApproval, setChatError, setIsLoading, setPendingApproval]
   );
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+  const handleCitationClick = useCallback(
+    async (citation: EvidenceRef) => {
+      if (!conversationId) {
+        return;
+      }
+
+      const citationKey = `${citation.snapshot_id}:${citation.path}:${citation.start_line}:${citation.end_line}`;
+      setSourcePreviewOpen(true);
+      setSourcePreviewLoading(true);
+      setSourcePreviewError(null);
+      setActiveCitationKey(citationKey);
+
+      try {
+        const preview = await api.getCitationPreview(conversationId, {
+          snapshotId: citation.snapshot_id,
+          path: citation.path,
+          startLine: citation.start_line,
+          endLine: citation.end_line,
+        });
+        setSourcePreview(preview);
+      } catch (error) {
+        setSourcePreview(null);
+        setSourcePreviewError(
+          error instanceof Error ? error.message : 'Failed to load cited source preview'
+        );
+      } finally {
+        setSourcePreviewLoading(false);
+        setActiveCitationKey(null);
+      }
+    },
+    [api, conversationId]
+  );
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void handleComposerSend();
     }
   };
 
@@ -206,20 +289,28 @@ export default function ChatView() {
     <div className="flex h-full min-h-0 flex-col bg-cream">
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6"
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-8 sm:px-6"
       >
-        <div className="mx-auto flex max-w-4xl flex-col gap-5">
+        <div className="mx-auto flex w-full max-w-[74rem] flex-col gap-8">
           {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-line bg-panel/40 px-6 py-20 text-center text-muted">
+            <div className="px-1 py-12 text-center">
               <p className="text-lg font-medium text-ink">Ready to analyze</p>
-              <p className="mt-2 max-w-xl text-sm">
+              <p className="mx-auto mt-3 max-w-2xl text-sm leading-7 text-muted">
                 Ask for architecture walkthroughs, code tracing, debugging help, refactors, or
                 implementation plans for this checkout.
               </p>
             </div>
           )}
-          {messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
+          {messages.map((message) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              onFollowupClick={(followup) => {
+                void sendMessage(followup);
+              }}
+              onCitationClick={handleCitationClick}
+              activeCitationKey={activeCitationKey}
+            />
           ))}
           {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
             <MessageBubble
@@ -228,6 +319,7 @@ export default function ChatView() {
                 role: 'assistant',
                 content: '',
                 isLoading: true,
+                statusUpdates: [],
               }}
             />
           )}
@@ -235,15 +327,18 @@ export default function ChatView() {
       </div>
 
       <div className="border-t border-line bg-panel px-4 py-4 sm:px-6">
-        <div className="mx-auto max-w-4xl">
-          <div className="rounded-3xl border border-line bg-cream p-3 shadow-sm">
+        <div className="mx-auto max-w-[74rem]">
+          <div className="rounded-[28px] border border-line bg-cream px-4 py-3 shadow-sm">
             <textarea
               ref={composerRef}
               aria-label="Message composer"
+              aria-describedby="composer-hint"
               rows={1}
               value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
+              onChange={(event) => setInputValue(event.target.value)}
               onKeyDown={handleKeyDown}
+              onFocus={() => setIsComposerFocused(true)}
+              onBlur={() => setIsComposerFocused(false)}
               disabled={isLoading || !!pendingApproval}
               placeholder={
                 pendingApproval
@@ -253,15 +348,25 @@ export default function ChatView() {
                   : 'Ask a question about the codebase, request a change, or ask for a walkthrough...'
               }
               className={cn(
-                'max-h-40 min-h-[56px] w-full resize-none bg-transparent px-3 py-2 text-sm text-ink outline-none transition',
+                'max-h-48 min-h-[44px] w-full resize-none bg-transparent px-1 py-1 text-[15px] leading-7 text-ink outline-none transition',
                 'placeholder:text-muted/60',
                 (isLoading || pendingApproval) && 'cursor-not-allowed opacity-60'
               )}
             />
             <div className="mt-3 flex items-center justify-between gap-3 border-t border-line pt-3">
-              <p className="text-xs text-muted">Enter to send, Shift+Enter for a new line.</p>
+              <p
+                id="composer-hint"
+                className={cn(
+                  'text-xs text-muted transition',
+                  isComposerFocused ? 'opacity-100' : 'opacity-0'
+                )}
+              >
+                Enter to send · Shift+Enter for a new line
+              </p>
               <button
-                onClick={handleSend}
+                onClick={() => {
+                  void handleComposerSend();
+                }}
                 disabled={isLoading || !!pendingApproval || !inputValue.trim()}
                 className={cn(
                   'rounded-2xl px-5 py-2.5 text-sm font-semibold text-white transition',
@@ -276,7 +381,7 @@ export default function ChatView() {
           </div>
         </div>
         {chatError && (
-          <div className="mx-auto mt-2 max-w-4xl text-xs text-red-600">
+          <div className="mx-auto mt-2 max-w-[74rem] text-xs text-red-600">
             {chatError}
           </div>
         )}
@@ -291,6 +396,14 @@ export default function ChatView() {
           onClose={() => setPendingApproval(null)}
         />
       )}
+
+      <SourcePreviewDrawer
+        open={sourcePreviewOpen}
+        preview={sourcePreview}
+        loading={sourcePreviewLoading}
+        error={sourcePreviewError}
+        onClose={() => setSourcePreviewOpen(false)}
+      />
     </div>
   );
 }

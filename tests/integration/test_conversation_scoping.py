@@ -284,3 +284,133 @@ def test_conversation_requires_repo_def_or_workspace(
         headers=headers,
     )
     assert resp.status_code == 422  # Pydantic validation error
+
+
+@mock_aws
+def test_conversation_citation_preview_endpoint(
+    tmp_path: Path,
+    sample_git_repo: Path,
+) -> None:
+    bucket_name = "code-analyst-citation-preview-test"
+    boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
+
+    test_settings = Settings(
+        s3_endpoint=None,
+        s3_bucket=bucket_name,
+        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
+        sandbox_supervisor_url="http://sandbox-supervisor",
+        auth_backend="header",
+        auth_sqlite_path=str(tmp_path / "auth.db"),
+    )
+    build_test_state(test_settings)
+
+    client = TestClient(control_plane_app)
+    headers = {
+        "X-Tenant-Id": "tenant_test",
+        "X-User-Email": "admin@test.com",
+    }
+    client.post(
+        "/v1/users",
+        json={"email": "admin@test.com", "name": "Admin", "is_admin": True},
+        headers=headers,
+    )
+
+    repo_resp = client.post(
+        "/v1/repos",
+        json={
+            "name": "Preview Repo",
+            "endpoint": str(sample_git_repo),
+            "adapter": {"kind": "github", "credential_ref": "public"},
+            "team_ids": [],
+        },
+        headers=headers,
+    )
+    repo_def_id = repo_resp.json()["repo_def_id"]
+
+    checkout_resp = client.post(
+        f"/v1/repos/{repo_def_id}/checkouts",
+        json={"repo_def_id": repo_def_id, "ref": "main"},
+        headers=headers,
+    )
+    checkout = checkout_resp.json()
+
+    conv_resp = client.post(
+        "/v1/conversations",
+        json={
+            "tenant_id": "tenant_test",
+            "repo_def_id": repo_def_id,
+            "checkout_id": checkout["checkout_id"],
+            "workspace_id": checkout["workspace_id"],
+            "title": "Preview Chat",
+        },
+        headers=headers,
+    )
+    conversation_id = conv_resp.json()["conversation_id"]
+
+    preview_resp = client.get(
+        f"/v1/conversations/{conversation_id}/citations/preview",
+        params={
+            "snapshot_id": checkout["snapshot_id"],
+            "path": "src/main.py",
+            "start_line": 1,
+            "end_line": 2,
+        },
+        headers=headers,
+    )
+    assert preview_resp.status_code == 200
+    preview_body = preview_resp.json()
+    assert preview_body["path"] == "src/main.py"
+    assert preview_body["preview_start_line"] == 1
+    assert preview_body["preview_end_line"] == 2
+    assert preview_body["lines"] == [
+        {"line_number": 1, "content": "def hello() -> str:"},
+        {"line_number": 2, "content": "    return 'hello-convo'"},
+    ]
+
+    clamped_resp = client.get(
+        f"/v1/conversations/{conversation_id}/citations/preview",
+        params={
+            "snapshot_id": checkout["snapshot_id"],
+            "path": "src/main.py",
+            "start_line": 100,
+            "end_line": 120,
+        },
+        headers=headers,
+    )
+    assert clamped_resp.status_code == 200
+    clamped_body = clamped_resp.json()
+    assert clamped_body["requested_start_line"] == 100
+    assert clamped_body["requested_end_line"] == 120
+    assert clamped_body["preview_start_line"] == 1
+    assert clamped_body["preview_end_line"] == 2
+
+    traversal_resp = client.get(
+        f"/v1/conversations/{conversation_id}/citations/preview",
+        params={
+            "snapshot_id": checkout["snapshot_id"],
+            "path": "../secrets.txt",
+            "start_line": 1,
+            "end_line": 1,
+        },
+        headers=headers,
+    )
+    assert traversal_resp.status_code == 400
+
+    second_checkout_resp = client.post(
+        f"/v1/repos/{repo_def_id}/checkouts",
+        json={"repo_def_id": repo_def_id, "ref": "main"},
+        headers=headers,
+    )
+    second_checkout = second_checkout_resp.json()
+
+    wrong_snapshot_resp = client.get(
+        f"/v1/conversations/{conversation_id}/citations/preview",
+        params={
+            "snapshot_id": second_checkout["snapshot_id"],
+            "path": "src/main.py",
+            "start_line": 1,
+            "end_line": 2,
+        },
+        headers=headers,
+    )
+    assert wrong_snapshot_resp.status_code == 404

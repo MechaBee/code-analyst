@@ -107,6 +107,21 @@ export interface EvidenceRef {
   excerpt_hash: string;
 }
 
+export interface CitationPreviewLine {
+  line_number: number;
+  content: string;
+}
+
+export interface CitationPreviewResponse {
+  snapshot_id: string;
+  path: string;
+  requested_start_line: number;
+  requested_end_line: number;
+  preview_start_line: number;
+  preview_end_line: number;
+  lines: CitationPreviewLine[];
+}
+
 export interface AnswerEnvelope {
   answer_markdown: string;
   citations: EvidenceRef[];
@@ -137,6 +152,7 @@ export interface Message {
   content: string;
   citations?: EvidenceRef[];
   followups?: string[];
+  statusUpdates?: string[];
   isLoading?: boolean;
   error?: boolean;
 }
