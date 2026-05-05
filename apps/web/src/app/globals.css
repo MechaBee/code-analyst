@@ -27,3 +27,119 @@
     background: #b5ad9f;
   }
 }
+
+@layer components {
+  .markdown-content {
+    @apply break-words;
+  }
+
+  .markdown-content > :first-child {
+    margin-top: 0;
+  }
+
+  .markdown-content > :last-child {
+    margin-bottom: 0;
+  }
+
+  .markdown-content h1 {
+    @apply mt-8 text-3xl font-semibold tracking-tight;
+  }
+
+  .markdown-content h2 {
+    @apply mt-8 text-2xl font-semibold tracking-tight;
+  }
+
+  .markdown-content h3 {
+    @apply mt-6 text-xl font-semibold;
+  }
+
+  .markdown-content h4 {
+    @apply mt-6 text-lg font-semibold;
+  }
+
+  .markdown-content h5,
+  .markdown-content h6 {
+    @apply mt-5 text-base font-semibold uppercase tracking-[0.08em];
+  }
+
+  .markdown-content p {
+    @apply my-3 leading-7;
+  }
+
+  .markdown-content ul {
+    @apply my-4 list-disc pl-6;
+  }
+
+  .markdown-content ol {
+    @apply my-4 list-decimal pl-6;
+  }
+
+  .markdown-content li {
+    @apply my-1.5 pl-1;
+  }
+
+  .markdown-content li > ul,
+  .markdown-content li > ol {
+    @apply my-2;
+  }
+
+  .markdown-content strong {
+    @apply font-semibold;
+  }
+
+  .markdown-content em {
+    @apply italic;
+  }
+
+  .markdown-content a {
+    @apply font-medium text-accent underline underline-offset-4 transition hover:opacity-80;
+  }
+
+  .markdown-content blockquote {
+    @apply my-5 border-l-4 border-accent/30 bg-panel/70 px-4 py-3 italic text-muted;
+  }
+
+  .markdown-content hr {
+    @apply my-6 border-0 border-t border-line;
+  }
+
+  .markdown-content code {
+    @apply rounded-md bg-panel px-1.5 py-0.5 font-mono text-[0.95em];
+  }
+
+  .markdown-content pre {
+    @apply my-5 overflow-x-auto rounded-2xl border border-line bg-panel px-4 py-3 text-[13px] leading-6;
+  }
+
+  .markdown-content pre code {
+    background: transparent;
+    padding: 0;
+    font-size: inherit;
+    line-height: inherit;
+  }
+
+  .markdown-content table {
+    @apply my-5 block w-full overflow-x-auto border-collapse text-left text-sm;
+  }
+
+  .markdown-content thead {
+    @apply border-b border-line;
+  }
+
+  .markdown-content tbody tr {
+    @apply border-b border-line/70;
+  }
+
+  .markdown-content th {
+    @apply px-3 py-2 font-semibold;
+  }
+
+  .markdown-content td {
+    @apply px-3 py-2 align-top;
+  }
+
+  .markdown-content input[type='checkbox'] {
+    @apply mr-2 h-4 w-4 accent-accent;
+    pointer-events: none;
+  }
+}

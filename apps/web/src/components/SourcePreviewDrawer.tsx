@@ -1,8 +1,18 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import React from 'react';
-import { cn } from '@/lib/utils';
 import type { CitationPreviewResponse } from '@/types/api';
+import type { SourceCodePreviewProps } from './SourceCodePreview';
+
+const SourceCodePreview = dynamic<SourceCodePreviewProps>(() => import('./SourceCodePreview'), {
+  ssr: false,
+  loading: () => (
+    <div className="rounded-2xl border border-line bg-panel px-4 py-5 text-sm text-muted">
+      Loading code preview...
+    </div>
+  ),
+});
 
 interface SourcePreviewDrawerProps {
   open: boolean;
@@ -37,9 +47,6 @@ export default function SourcePreviewDrawer({
   if (!open) {
     return null;
   }
-
-  const highlightedStart = preview?.requested_start_line ?? 0;
-  const highlightedEnd = preview?.requested_end_line ?? 0;
 
   return (
     <div className="fixed inset-0 z-40" data-testid="citation-preview-drawer">
@@ -84,36 +91,7 @@ export default function SourcePreviewDrawer({
               {error}
             </div>
           ) : preview ? (
-            <div className="overflow-hidden rounded-2xl border border-line bg-panel">
-              <div className="border-b border-line bg-panel px-4 py-2 text-xs text-muted">
-                Preview window {preview.preview_start_line}-{preview.preview_end_line}
-              </div>
-              <div className="overflow-auto">
-                <pre className="min-w-full text-sm leading-6 text-ink">
-                  {preview.lines.map((line) => {
-                    const highlighted =
-                      line.line_number >= highlightedStart && line.line_number <= highlightedEnd;
-                    return (
-                      <div
-                        key={line.line_number}
-                        className={cn(
-                          'grid grid-cols-[64px_1fr] gap-4 px-4 py-1.5 font-mono',
-                          highlighted ? 'bg-accent/10' : 'bg-transparent'
-                        )}
-                        data-testid={highlighted ? 'citation-preview-highlighted-line' : undefined}
-                      >
-                        <span className="select-none text-right text-xs text-muted" data-testid="citation-preview-line-number">
-                          {line.line_number}
-                        </span>
-                        <span className="overflow-x-auto whitespace-pre-wrap break-words">
-                          {line.content || ' '}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </pre>
-              </div>
-            </div>
+            <SourceCodePreview preview={preview} />
           ) : null}
         </div>
       </aside>

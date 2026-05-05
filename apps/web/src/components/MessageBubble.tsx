@@ -74,7 +74,7 @@ export default function MessageBubble({
                 Thinking…
               </div>
               {message.statusUpdates && message.statusUpdates.length > 0 && (
-                <ul className="space-y-1.5 text-sm text-muted">
+                <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted">
                   {message.statusUpdates.slice(-4).map((status, index) => (
                     <li key={`${status}-${index}`}>{status}</li>
                   ))}
@@ -82,7 +82,7 @@ export default function MessageBubble({
               )}
             </div>
           ) : (
-            <div className="prose prose-neutral max-w-none prose-headings:mb-3 prose-headings:mt-8 prose-p:my-3 prose-p:leading-7 prose-ul:my-4 prose-ol:my-4 prose-li:my-1.5 prose-code:rounded prose-code:bg-panel prose-code:px-1 prose-code:py-0.5 prose-code:text-[0.95em] prose-pre:rounded-2xl prose-pre:border prose-pre:border-line prose-pre:bg-panel prose-pre:px-4 prose-pre:py-3 prose-strong:text-ink">
+            <div className="markdown-content max-w-none">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {message.content}
               </ReactMarkdown>
