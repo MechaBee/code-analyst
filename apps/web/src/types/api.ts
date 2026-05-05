@@ -147,7 +147,16 @@ export interface Message {
 
 export interface RepositoryAdapter {
   kind: string; // "github" | "gitlab"
-  credential_ref: string;
+  auth_kind: string; // "public" | "token"
+  access_secret_ref?: string | null;
+  credential_ref?: string | null;
+}
+
+export interface RepositoryAdapterCreateRequest {
+  kind: string;
+  auth_kind: string;
+  access_secret?: Record<string, unknown> | null;
+  credential_ref?: string | null;
 }
 
 export interface RepositoryDefinition {
@@ -271,7 +280,7 @@ export interface UserListResponse {
 export interface RepositoryDefinitionCreateRequest {
   name?: string | null;
   endpoint: string;
-  adapter: RepositoryAdapter;
+  adapter: RepositoryAdapterCreateRequest;
   team_ids?: string[];
 }
 

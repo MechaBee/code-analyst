@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 def utc_now() -> datetime:
@@ -214,7 +214,78 @@ class SandboxDisposeResponse(BaseModel):
 
 class RepositoryAdapter(BaseModel):
     kind: str  # "github" | "gitlab" (future)
-    credential_ref: str  # "public" | "env:VAR_NAME"
+    auth_kind: str = "public"  # "public" | "token" | kind-specific values later
+    access_secret_ref: str | None = None
+    credential_ref: str | None = None  # legacy compatibility for "public" | "env:VAR_NAME"
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_credential_ref(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+
+        if "auth_kind" in value:
+            return value
+
+        legacy_credential_ref = str(value.get("credential_ref") or "").strip()
+        if legacy_credential_ref in {"", "public", "none"}:
+            return {
+                **value,
+                "auth_kind": "public",
+                "access_secret_ref": value.get("access_secret_ref"),
+            }
+        return {
+            **value,
+            "auth_kind": "token",
+            "access_secret_ref": value.get("access_secret_ref"),
+        }
+
+
+class RepositoryAdapterCreateRequest(BaseModel):
+    kind: str  # "github" | "gitlab" (future)
+    auth_kind: str = "public"
+    access_secret: dict[str, Any] | None = None
+    credential_ref: str | None = None  # legacy compatibility for "public" | "env:VAR_NAME"
+
+    @model_validator(mode="after")
+    def validate_secret_shape(self) -> "RepositoryAdapterCreateRequest":
+        auth_kind = self.auth_kind.strip() or "public"
+        credential_ref = (self.credential_ref or "").strip() or None
+
+        if (
+            auth_kind == "public"
+            and credential_ref is not None
+            and credential_ref not in {"public", "none"}
+        ):
+            auth_kind = "token"
+
+        self.auth_kind = auth_kind
+        self.credential_ref = credential_ref
+
+        if auth_kind == "public":
+            if self.access_secret is not None:
+                raise ValueError("Public repositories cannot include an access_secret.")
+            return self
+
+        if self.access_secret is None and credential_ref is None:
+            raise ValueError(
+                "Non-public repositories require either an access_secret or a legacy credential_ref."
+            )
+        return self
+
+
+class RepositoryAdapterUpdateRequest(BaseModel):
+    auth_kind: str | None = None
+    access_secret: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_secret_shape(self) -> "RepositoryAdapterUpdateRequest":
+        auth_kind = self.auth_kind.strip().lower() if self.auth_kind is not None else None
+        self.auth_kind = auth_kind or None
+
+        if self.auth_kind == "public" and self.access_secret is not None:
+            raise ValueError("Public repositories cannot include an access_secret.")
+        return self
 
 
 class RepositoryDefinition(BaseModel):
@@ -225,6 +296,7 @@ class RepositoryDefinition(BaseModel):
     adapter: RepositoryAdapter
     team_ids: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
+    archived_at: datetime | None = None
 
 
 class User(BaseModel):
@@ -342,7 +414,7 @@ class UserListResponse(BaseModel):
 class RepositoryDefinitionCreateRequest(BaseModel):
     name: str | None = None
     endpoint: str
-    adapter: RepositoryAdapter
+    adapter: RepositoryAdapterCreateRequest
     team_ids: list[str] = Field(default_factory=list)
 
 
@@ -359,6 +431,13 @@ class RepositoryDefinitionCreateResponse(BaseModel):
 class RepositoryDefinitionListResponse(BaseModel):
     tenant_id: str
     repo_definitions: list[RepositoryDefinition]
+
+
+class RepositoryDefinitionUpdateRequest(BaseModel):
+    name: str | None = None
+    endpoint: str | None = None
+    team_ids: list[str] | None = None
+    adapter: RepositoryAdapterUpdateRequest | None = None
 
 
 class RepositoryDefinitionUpdateTeamsRequest(BaseModel):

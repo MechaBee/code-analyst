@@ -57,7 +57,9 @@ from .app_state_store import AppStateStore
 from .config import settings
 from .object_store import ObjectStore
 from .question_orchestrator import QuestionOrchestrator
+from .repository_checkout import build_repository_checkout_service
 from .sandbox_supervisor_client import SandboxSupervisorClient
+from .secret_store import SecretStoreError, build_secret_store
 from .state_store import (
     ApprovalStateStore,
     ConversationStateStore,
@@ -82,9 +84,15 @@ class AppState:
         self.run_store = RunStateStore(self.object_store)
         self.approval_store = ApprovalStateStore(self.object_store)
         self.app_state_store = AppStateStore(self.object_store)
+        self.secret_store = build_secret_store(settings)
+        self.repository_checkout_service = build_repository_checkout_service(
+            settings,
+            secret_store=self.secret_store,
+        )
         self.workspace_import_service = WorkspaceImportService(
             settings=settings,
             object_store=self.object_store,
+            repository_checkout_service=self.repository_checkout_service,
         )
         self.question_orchestrator = QuestionOrchestrator(
             sandbox_client=SandboxSupervisorClient(
@@ -747,18 +755,56 @@ async def create_repo_definition(
     principal = await ensure_user(request)
     require_admin(principal)
     team_ids = normalize_team_ids(principal.tenant_id, body.team_ids)
+    stored_secret_ref: str | None = None
+    if body.adapter.access_secret is not None:
+        try:
+            stored_secret_ref = app.state.state.secret_store.store_secret(
+                tenant_id=principal.tenant_id,
+                secret=body.adapter.access_secret,
+            )
+        except SecretStoreError as error:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to store repository access secret: {error}",
+            ) from error
+
+    adapter = RepositoryAdapter(
+        kind=body.adapter.kind.strip().lower(),
+        auth_kind=body.adapter.auth_kind.strip().lower() or "public",
+        access_secret_ref=stored_secret_ref,
+        credential_ref=(
+            body.adapter.credential_ref
+            if stored_secret_ref is None
+            else None
+        ),
+    )
     repo_def = RepositoryDefinition(
         tenant_id=principal.tenant_id,
         repo_def_id=new_id("repo"),
         name=body.name.strip() if body.name else None,
         endpoint=body.endpoint,
-        adapter=body.adapter,
+        adapter=adapter,
         team_ids=team_ids,
     )
-    await run_in_threadpool(
-        app.state.state.app_state_store.create_repo_definition,
-        repo_def,
-    )
+    try:
+        await run_in_threadpool(
+            app.state.state.app_state_store.create_repo_definition,
+            repo_def,
+        )
+    except Exception:
+        if stored_secret_ref is not None:
+            try:
+                app.state.state.secret_store.delete_secret(
+                    tenant_id=principal.tenant_id,
+                    secret_ref=stored_secret_ref,
+                )
+            except SecretStoreError:
+                logger.warning(
+                    "Failed to roll back stored repository secret after repo creation failure: tenant_id=%s repo_def_id=%s",
+                    principal.tenant_id,
+                    repo_def.repo_def_id,
+                )
+        raise
     return RepositoryDefinitionCreateResponse(
         tenant_id=repo_def.tenant_id,
         repo_def_id=repo_def.repo_def_id,
@@ -858,8 +904,13 @@ async def create_checkout(
             repo_def_id=repo_def_id,
             ref=body.ref,
             endpoint=repo_def.endpoint,
-            credential_ref=repo_def.adapter.credential_ref,
+            adapter=repo_def.adapter,
         )
+    except WorkspaceImportError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Checkout failed: {error}",
+        ) from error
     except Exception as error:
         raise HTTPException(
             status_code=502,

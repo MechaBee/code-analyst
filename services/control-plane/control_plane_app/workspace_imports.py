@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import zstandard
 from code_analyst_contracts import (
+    RepositoryAdapter,
     SnapshotFileEntry,
     SnapshotManifest,
     WorkspaceImportRequest,
@@ -21,6 +22,12 @@ from code_analyst_contracts import (
 
 from .config import Settings
 from .object_store import ObjectStore
+from .repository_checkout import (
+    RepositoryCheckoutError,
+    RepositoryCheckoutService,
+    build_repository_checkout_service,
+)
+from .secret_store import build_secret_store
 
 
 class WorkspaceImportError(RuntimeError):
@@ -35,9 +42,20 @@ class WorkspaceImportArtifacts:
 
 
 class WorkspaceImportService:
-    def __init__(self, settings: Settings, object_store: ObjectStore) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        object_store: ObjectStore,
+        repository_checkout_service: RepositoryCheckoutService | None = None,
+    ) -> None:
         self._settings = settings
         self._object_store = object_store
+        self._repository_checkout_service = repository_checkout_service or (
+            build_repository_checkout_service(
+                settings,
+                secret_store=build_secret_store(settings),
+            )
+        )
 
     def import_github_repo(
         self,
@@ -49,6 +67,10 @@ class WorkspaceImportService:
             repo_url=request.repo_url,
             ref=request.ref,
             github_credential_ref=request.github_credential_ref,
+            metadata={
+                "import_source": "legacy_github",
+                "github_credential_ref": request.github_credential_ref,
+            },
         )
 
     def import_from_repo_definition(
@@ -58,14 +80,20 @@ class WorkspaceImportService:
         repo_def_id: str,
         ref: str,
         endpoint: str,
-        credential_ref: str,
+        adapter: RepositoryAdapter,
     ) -> WorkspaceImportArtifacts:
         """Import from a repository definition. Returns workspace artifacts."""
         return self._import_core(
             tenant_id=tenant_id,
             repo_url=endpoint,
             ref=ref,
-            github_credential_ref=credential_ref,
+            repo_adapter=adapter,
+            metadata={
+                "import_source": "repository_definition",
+                "repo_def_id": repo_def_id,
+                "repo_kind": adapter.kind,
+                "repo_auth_kind": adapter.auth_kind,
+            },
         )
 
     def _import_core(
@@ -73,7 +101,9 @@ class WorkspaceImportService:
         tenant_id: str,
         repo_url: str,
         ref: str,
-        github_credential_ref: str,
+        github_credential_ref: str | None = None,
+        repo_adapter: RepositoryAdapter | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> WorkspaceImportArtifacts:
         workspace_id = self._new_id("ws")
         snapshot_id = self._new_id("snap")
@@ -88,12 +118,25 @@ class WorkspaceImportService:
             repo_dir = temp_path / "repo"
             archive_path = temp_path / "repo.tar.zst"
 
-            self._clone_repository(
-                repo_url=repo_url,
-                ref=ref,
-                github_credential_ref=github_credential_ref,
-                target_dir=repo_dir,
-            )
+            if repo_adapter is not None:
+                resolved_ref = self._checkout_repository_definition(
+                    tenant_id=tenant_id,
+                    repo_url=repo_url,
+                    ref=ref,
+                    repo_adapter=repo_adapter,
+                    target_dir=repo_dir,
+                )
+            elif github_credential_ref is not None:
+                resolved_ref = self._clone_repository(
+                    repo_url=repo_url,
+                    ref=ref,
+                    github_credential_ref=github_credential_ref,
+                    target_dir=repo_dir,
+                )
+            else:
+                raise WorkspaceImportError(
+                    "Repository import requires either a repo adapter or a legacy credential ref."
+                )
             commit_sha = self._resolve_commit_sha(repo_dir)
             archive_object_key, manifest_object_key, metadata_object_key = (
                 self._build_object_keys(
@@ -107,7 +150,7 @@ class WorkspaceImportService:
                 workspace_id=workspace_id,
                 snapshot_id=snapshot_id,
                 repo_url=repo_url,
-                ref=ref,
+                ref=resolved_ref,
                 commit_sha=commit_sha,
                 archive_object_key=archive_object_key,
                 manifest_object_key=manifest_object_key,
@@ -121,10 +164,10 @@ class WorkspaceImportService:
             self._create_archive(repo_dir=repo_dir, archive_path=archive_path)
             self._upload_snapshot(
                 tenant_id=tenant_id,
-                github_credential_ref=github_credential_ref,
                 snapshot=snapshot_ref,
                 manifest=manifest,
                 archive_path=archive_path,
+                metadata=metadata or {},
             )
 
         response = WorkspaceImportResponse(
@@ -193,10 +236,10 @@ class WorkspaceImportService:
         self,
         *,
         tenant_id: str,
-        github_credential_ref: str,
         snapshot: WorkspaceSnapshotRef,
         manifest: SnapshotManifest,
         archive_path: Path,
+        metadata: dict[str, object],
     ) -> None:
         self._object_store.upload_file(
             object_key=snapshot.archive_object_key,
@@ -207,17 +250,37 @@ class WorkspaceImportService:
             object_key=snapshot.manifest_object_key,
             payload=manifest.model_dump(mode="json"),
         )
-        metadata = {
+        metadata_payload = {
             "tenant_id": tenant_id,
-            "github_credential_ref": github_credential_ref,
             "snapshot": snapshot.model_dump(mode="json"),
+            **metadata,
         }
         if snapshot.metadata_object_key is None:
             raise WorkspaceImportError("Snapshot metadata object key was not set")
         self._object_store.upload_json(
             object_key=snapshot.metadata_object_key,
-            payload=metadata,
+            payload=metadata_payload,
         )
+
+    def _checkout_repository_definition(
+        self,
+        *,
+        tenant_id: str,
+        repo_url: str,
+        ref: str,
+        repo_adapter: RepositoryAdapter,
+        target_dir: Path,
+    ) -> str:
+        try:
+            return self._repository_checkout_service.checkout(
+                tenant_id=tenant_id,
+                endpoint=repo_url,
+                ref=ref,
+                adapter=repo_adapter,
+                target_dir=target_dir,
+            )
+        except RepositoryCheckoutError as error:
+            raise WorkspaceImportError(str(error)) from error
 
     def _clone_repository(
         self,
@@ -225,7 +288,7 @@ class WorkspaceImportService:
         ref: str,
         github_credential_ref: str,
         target_dir: Path,
-    ) -> None:
+    ) -> str:
         clone_url = self._build_clone_url(repo_url, github_credential_ref)
         self._run_git(
             ["clone", "--filter=blob:none", "--no-checkout", clone_url, str(target_dir)],
@@ -245,7 +308,7 @@ class WorkspaceImportService:
             try:
                 self._run_git(command, cwd=target_dir)
                 self._run_git(["checkout", "FETCH_HEAD"], cwd=target_dir)
-                return
+                return resolved_ref
             except subprocess.CalledProcessError as error:
                 last_error = error
 

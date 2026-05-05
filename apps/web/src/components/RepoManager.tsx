@@ -1,12 +1,15 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import Link from 'next/link';
 import { useApi } from '@/hooks/useApi';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
 import NavBar from './NavBar';
-import type { RepositoryDefinition, RepositoryAdapter, Checkout } from '@/types/api';
+import type {
+  RepositoryDefinition,
+  RepositoryAdapterCreateRequest,
+  Checkout,
+} from '@/types/api';
 
 export default function RepoManager() {
   const { isAdmin, isLoading: authLoading } = useAuth();
@@ -15,7 +18,9 @@ export default function RepoManager() {
   const [checkoutsMap, setCheckoutsMap] = useState<Record<string, Checkout[]>>({});
   const [name, setName] = useState('');
   const [endpoint, setEndpoint] = useState('');
-  const [credentialRef, setCredentialRef] = useState('public');
+  const [repoKind, setRepoKind] = useState('github');
+  const [authKind, setAuthKind] = useState('public');
+  const [secretJson, setSecretJson] = useState('');
   const [teamIds, setTeamIds] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,9 +56,19 @@ export default function RepoManager() {
     setLoading(true);
     setError(null);
     try {
-      const adapter: RepositoryAdapter = {
-        kind: 'github',
-        credential_ref: credentialRef,
+      let accessSecret: Record<string, unknown> | null = null;
+      if (authKind !== 'public') {
+        const parsed = JSON.parse(secretJson);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('Secret JSON must be a JSON object.');
+        }
+        accessSecret = parsed as Record<string, unknown>;
+      }
+
+      const adapter: RepositoryAdapterCreateRequest = {
+        kind: repoKind,
+        auth_kind: authKind,
+        access_secret: accessSecret,
       };
       await api.createRepoDefinition({
         name: name || null,
@@ -66,7 +81,9 @@ export default function RepoManager() {
       });
       setName('');
       setEndpoint('');
-      setCredentialRef('public');
+      setRepoKind('github');
+      setAuthKind('public');
+      setSecretJson('');
       setTeamIds('');
       refresh();
     } catch (err) {
@@ -108,6 +125,20 @@ export default function RepoManager() {
                 />
               </div>
               <div>
+                <label className="mb-1 block text-xs font-medium text-ink">Repository Kind</label>
+                <select
+                  value={repoKind}
+                  onChange={(e) => setRepoKind(e.target.value)}
+                  className={cn(
+                    'w-full rounded-lg border bg-cream px-3 py-2 text-sm text-ink outline-none',
+                    'focus:border-accent focus:ring-1 focus:ring-accent',
+                    'border-line'
+                  )}
+                >
+                  <option value="github">GitHub</option>
+                </select>
+              </div>
+              <div>
                 <label className="mb-1 block text-xs font-medium text-ink">Endpoint URL</label>
                 <input
                   type="url"
@@ -123,17 +154,19 @@ export default function RepoManager() {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-ink">Credential Ref</label>
-                <input
-                  type="text"
-                  value={credentialRef}
-                  onChange={(e) => setCredentialRef(e.target.value)}
+                <label className="mb-1 block text-xs font-medium text-ink">Access Mode</label>
+                <select
+                  value={authKind}
+                  onChange={(e) => setAuthKind(e.target.value)}
                   className={cn(
                     'w-full rounded-lg border bg-cream px-3 py-2 text-sm text-ink outline-none',
-                    'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
+                    'focus:border-accent focus:ring-1 focus:ring-accent',
                     'border-line'
                   )}
-                />
+                >
+                  <option value="public">Public</option>
+                  <option value="token">Private token</option>
+                </select>
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium text-ink">Team IDs (comma-separated)</label>
@@ -150,12 +183,28 @@ export default function RepoManager() {
                 />
               </div>
             </div>
+            {authKind !== 'public' && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink">Access Secret JSON</label>
+                <textarea
+                  value={secretJson}
+                  onChange={(e) => setSecretJson(e.target.value)}
+                  rows={5}
+                  placeholder={'{\n  "token": "ghp_example"\n}'}
+                  className={cn(
+                    'w-full rounded-lg border bg-cream px-3 py-2 font-mono text-sm text-ink outline-none',
+                    'placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent',
+                    'border-line'
+                  )}
+                />
+              </div>
+            )}
             <button
               type="submit"
-              disabled={loading || !endpoint.trim()}
+              disabled={loading || !endpoint.trim() || (authKind !== 'public' && !secretJson.trim())}
               className={cn(
                 'rounded-lg px-4 py-2 text-sm font-semibold text-white transition',
-                loading || !endpoint.trim()
+                loading || !endpoint.trim() || (authKind !== 'public' && !secretJson.trim())
                   ? 'cursor-not-allowed bg-accent/60'
                   : 'bg-accent hover:bg-accent/90'
               )}
@@ -222,7 +271,7 @@ function RepoCard({
           <div className="mt-1 text-xs text-muted">Teams: {repo.team_ids.join(', ') || 'none'}</div>
         </div>
         <div className="rounded-md bg-cream px-2 py-1 text-xs font-medium text-ink">
-          {repo.adapter.kind}
+          {repo.adapter.kind} / {repo.adapter.auth_kind}
         </div>
       </div>
 

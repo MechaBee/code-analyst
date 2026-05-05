@@ -15,6 +15,14 @@ class Settings(BaseSettings):
     sandbox_supervisor_timeout_seconds: float = 280.0
     workspace_tmp_dir: str = "/tmp/code-analyst/workspaces"
     s3_force_path_style: bool = True
+    secret_store_provider: str = "s3"
+    secret_store_s3_endpoint: str | None = None
+    secret_store_s3_region: str | None = None
+    secret_store_s3_bucket: str | None = None
+    secret_store_s3_access_key_id: str | None = None
+    secret_store_s3_secret_access_key: str | None = None
+    secret_store_s3_force_path_style: bool | None = None
+    secret_store_s3_prefix: str = "secret-store"
 
 
 settings = Settings()
