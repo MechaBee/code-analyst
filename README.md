@@ -58,7 +58,6 @@ Use deterministic analysis for a zero-API-key local evaluation, or switch to an 
 ```env
 AUTH_BOOTSTRAP_SECRET=replace-with-a-random-secret
 ANALYSIS_BACKEND=claude
-ANALYSIS_BACKEND=claude
 ANTHROPIC_API_KEY=your-anthropic-api-key
 
 
