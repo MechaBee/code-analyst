@@ -53,17 +53,17 @@ Use deterministic analysis for a zero-API-key local evaluation, or switch to an 
 
 ```env
 AUTH_BOOTSTRAP_SECRET=replace-with-a-random-secret
-ANALYSIS_BACKEND=deterministic
+ANALYSIS_BACKEND=claude
+ANALYSIS_BACKEND=claude
+ANTHROPIC_API_KEY=your-anthropic-api-key
 
-# Optional: OpenAI-backed analysis
+
+# Coming soon: OpenAI-backed analysis
 # ANALYSIS_BACKEND=openai
 # OPENAI_API_KEY=your-openai-api-key
 # OPENAI_MODEL=gpt-5.4-mini
 # OPENAI_REASONING_EFFORT=low
 
-# Optional: Claude-backed analysis
-# ANALYSIS_BACKEND=claude
-# ANTHROPIC_API_KEY=your-anthropic-api-key
 ```
 
 ### 2. Start the stack
@@ -124,12 +124,13 @@ Use the returned `invite_url` to:
 ## Key Configuration
 
 - `AUTH_BOOTSTRAP_SECRET`: required for first-admin bootstrap
-- `ANALYSIS_BACKEND`: `deterministic`, `openai`, or `claude`
+- `ANALYSIS_BACKEND`: `claude` or `openai`
+- `ANTHROPIC_API_KEY`: required when `ANALYSIS_BACKEND=claude`
+- `NEXT_PUBLIC_TENANT_ID`: optional frontend tenant override, defaults to `tenant_local`
 - `OPENAI_API_KEY`: required when `ANALYSIS_BACKEND=openai`
 - `OPENAI_MODEL`: OpenAI model name for the sandbox analysis backend
 - `OPENAI_REASONING_EFFORT`: OpenAI reasoning effort level
-- `ANTHROPIC_API_KEY`: required when `ANALYSIS_BACKEND=claude`
-- `NEXT_PUBLIC_TENANT_ID`: optional frontend tenant override, defaults to `tenant_local`
+
 
 ## Project Layout
 
