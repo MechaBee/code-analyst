@@ -1,6 +1,6 @@
 # Code Analyst
 
-Code Analyst is a self-hosted GitHub repository analysis app. It lets teams register repositories, create immutable checkouts for a branch or ref, start conversations against a workspace snapshot, and get grounded answers with citations back to the code.
+Code Analyst is a self-hosted GitHub repository analysis app wrapping (Claude Agent SDK)[https://code.claude.com/docs/en/agent-sdk/overview] (OpenAI Agents SDK coming soon). It lets teams register repositories, create immutable checkouts for a branch or ref, start conversations against a workspace snapshot, and get grounded answers with citations back to the code.
 
 The current implementation is focused on GitHub repositories. The repository model is designed to expand to additional providers over time, including GitLab.
 
