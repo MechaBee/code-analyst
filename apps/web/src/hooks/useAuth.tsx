@@ -9,13 +9,14 @@ export interface AuthState {
   email: string;
   name: string | null;
   isAdmin: boolean;
+  isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
 }
 
 interface AuthContextValue extends AuthState {
   refresh: () => void;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -27,6 +28,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     email: '',
     name: null,
     isAdmin: false,
+    isAuthenticated: false,
     isLoading: true,
     error: null,
   });
@@ -41,25 +43,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email: me.email,
           name: me.name || null,
           isAdmin: me.is_admin,
+          isAuthenticated: true,
           isLoading: false,
           error: null,
         });
       })
       .catch((err: Error) => {
+        if (err.message.startsWith('HTTP 401')) {
+          setState({
+            tenantId: '',
+            email: '',
+            name: null,
+            isAdmin: false,
+            isAuthenticated: false,
+            isLoading: false,
+            error: null,
+          });
+          return;
+        }
         setState((s) => ({
           ...s,
+          isAuthenticated: false,
           isLoading: false,
           error: err.message,
         }));
       });
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      // Ignore logout failures and clear local auth state anyway.
+    }
     setState({
       tenantId: '',
       email: '',
       name: null,
       isAdmin: false,
+      isAuthenticated: false,
       isLoading: false,
       error: null,
     });

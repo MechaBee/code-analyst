@@ -8,19 +8,10 @@ import boto3
 import httpx
 import pytest
 from code_analyst_contracts import ConversationCreateRequest
-from control_plane_app.app_state_store import AppStateStore
 from control_plane_app.main import app as control_plane_app
 from control_plane_app.main import AppState as ControlPlaneAppState
-from control_plane_app.object_store import ObjectStore as ControlPlaneObjectStore
 from control_plane_app.question_orchestrator import QuestionOrchestrator
 from control_plane_app.sandbox_supervisor_client import SandboxSupervisorClient
-from control_plane_app.state_store import (
-    ApprovalStateStore,
-    ConversationStateStore,
-    RunStateStore,
-    WorkspaceStateStore,
-)
-from control_plane_app.workspace_imports import WorkspaceImportService
 from fastapi.testclient import TestClient
 from moto import mock_aws
 from sandbox_supervisor_app.analysis_adapter import DeterministicAnalysisAdapter
@@ -31,6 +22,37 @@ from sandbox_supervisor_app.workspace_materializer import WorkspaceMaterializer
 
 from control_plane_app.config import Settings as ControlPlaneSettings
 from sandbox_supervisor_app.config import Settings as SandboxSupervisorSettings
+
+
+def build_control_plane_settings(*, tmp_path: Path, bucket_name: str) -> ControlPlaneSettings:
+    return ControlPlaneSettings(
+        s3_endpoint=None,
+        s3_bucket=bucket_name,
+        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
+        sandbox_supervisor_url="http://sandbox-supervisor",
+        auth_backend="header",
+        auth_sqlite_path=str(tmp_path / "control-plane-auth.db"),
+    )
+
+
+def build_control_plane_state(
+    *,
+    settings: ControlPlaneSettings,
+    sandbox_transport: httpx.ASGITransport,
+) -> ControlPlaneAppState:
+    state = ControlPlaneAppState(settings)
+    state.question_orchestrator = QuestionOrchestrator(
+        sandbox_client=SandboxSupervisorClient(
+            settings.sandbox_supervisor_url,
+            transport=sandbox_transport,
+        ),
+        conversation_store=state.conversation_store,
+        run_store=state.run_store,
+        workspace_store=state.workspace_store,
+        approval_store=state.approval_store,
+        app_state_store=state.app_state_store,
+    )
+    return state
 
 
 @pytest.fixture()
@@ -71,11 +93,9 @@ def test_question_flow_calls_sandbox_supervisor(
     bucket_name = "code-analyst-question-flow"
     boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
 
-    control_plane_settings = ControlPlaneSettings(
-        s3_endpoint=None,
-        s3_bucket=bucket_name,
-        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
-        sandbox_supervisor_url="http://sandbox-supervisor",
+    control_plane_settings = build_control_plane_settings(
+        tmp_path=tmp_path,
+        bucket_name=bucket_name,
     )
     sandbox_settings = SandboxSupervisorSettings(
         s3_endpoint=None,
@@ -93,29 +113,9 @@ def test_question_flow_calls_sandbox_supervisor(
     sandbox_supervisor_app.state.state = supervisor_state
 
     sandbox_transport = httpx.ASGITransport(app=sandbox_supervisor_app)
-    control_plane_state = ControlPlaneAppState()
-    control_plane_state.object_store = ControlPlaneObjectStore(control_plane_settings)
-    control_plane_state.workspace_store = WorkspaceStateStore(control_plane_state.object_store)
-    control_plane_state.conversation_store = ConversationStateStore(
-        control_plane_state.object_store
-    )
-    control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
-    control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
-    control_plane_state.app_state_store = AppStateStore(control_plane_state.object_store)
-    control_plane_state.workspace_import_service = WorkspaceImportService(
+    control_plane_state = build_control_plane_state(
         settings=control_plane_settings,
-        object_store=control_plane_state.object_store,
-    )
-    control_plane_state.question_orchestrator = QuestionOrchestrator(
-        sandbox_client=SandboxSupervisorClient(
-            "http://sandbox-supervisor",
-            transport=sandbox_transport,
-        ),
-        conversation_store=control_plane_state.conversation_store,
-        run_store=control_plane_state.run_store,
-        workspace_store=control_plane_state.workspace_store,
-        approval_store=control_plane_state.approval_store,
-        app_state_store=control_plane_state.app_state_store,
+        sandbox_transport=sandbox_transport,
     )
     control_plane_app.state.state = control_plane_state
 
@@ -205,11 +205,9 @@ def test_question_flow_disposes_sandbox_when_not_resuming(
     bucket_name = "code-analyst-dispose-test"
     boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
 
-    control_plane_settings = ControlPlaneSettings(
-        s3_endpoint=None,
-        s3_bucket=bucket_name,
-        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
-        sandbox_supervisor_url="http://sandbox-supervisor",
+    control_plane_settings = build_control_plane_settings(
+        tmp_path=tmp_path,
+        bucket_name=bucket_name,
     )
     sandbox_settings = SandboxSupervisorSettings(
         s3_endpoint=None,
@@ -227,29 +225,9 @@ def test_question_flow_disposes_sandbox_when_not_resuming(
     sandbox_supervisor_app.state.state = supervisor_state
 
     sandbox_transport = httpx.ASGITransport(app=sandbox_supervisor_app)
-    control_plane_state = ControlPlaneAppState()
-    control_plane_state.object_store = ControlPlaneObjectStore(control_plane_settings)
-    control_plane_state.workspace_store = WorkspaceStateStore(control_plane_state.object_store)
-    control_plane_state.conversation_store = ConversationStateStore(
-        control_plane_state.object_store
-    )
-    control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
-    control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
-    control_plane_state.app_state_store = AppStateStore(control_plane_state.object_store)
-    control_plane_state.workspace_import_service = WorkspaceImportService(
+    control_plane_state = build_control_plane_state(
         settings=control_plane_settings,
-        object_store=control_plane_state.object_store,
-    )
-    control_plane_state.question_orchestrator = QuestionOrchestrator(
-        sandbox_client=SandboxSupervisorClient(
-            "http://sandbox-supervisor",
-            transport=sandbox_transport,
-        ),
-        conversation_store=control_plane_state.conversation_store,
-        run_store=control_plane_state.run_store,
-        workspace_store=control_plane_state.workspace_store,
-        approval_store=control_plane_state.approval_store,
-        app_state_store=control_plane_state.app_state_store,
+        sandbox_transport=sandbox_transport,
     )
     control_plane_app.state.state = control_plane_state
 
@@ -310,11 +288,9 @@ def test_archived_repo_conversation_can_still_execute_questions(
     bucket_name = "code-analyst-archived-repo-question-flow"
     boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
 
-    control_plane_settings = ControlPlaneSettings(
-        s3_endpoint=None,
-        s3_bucket=bucket_name,
-        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
-        sandbox_supervisor_url="http://sandbox-supervisor",
+    control_plane_settings = build_control_plane_settings(
+        tmp_path=tmp_path,
+        bucket_name=bucket_name,
     )
     sandbox_settings = SandboxSupervisorSettings(
         s3_endpoint=None,
@@ -332,29 +308,9 @@ def test_archived_repo_conversation_can_still_execute_questions(
     sandbox_supervisor_app.state.state = supervisor_state
 
     sandbox_transport = httpx.ASGITransport(app=sandbox_supervisor_app)
-    control_plane_state = ControlPlaneAppState()
-    control_plane_state.object_store = ControlPlaneObjectStore(control_plane_settings)
-    control_plane_state.workspace_store = WorkspaceStateStore(control_plane_state.object_store)
-    control_plane_state.conversation_store = ConversationStateStore(
-        control_plane_state.object_store
-    )
-    control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
-    control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
-    control_plane_state.app_state_store = AppStateStore(control_plane_state.object_store)
-    control_plane_state.workspace_import_service = WorkspaceImportService(
+    control_plane_state = build_control_plane_state(
         settings=control_plane_settings,
-        object_store=control_plane_state.object_store,
-    )
-    control_plane_state.question_orchestrator = QuestionOrchestrator(
-        sandbox_client=SandboxSupervisorClient(
-            "http://sandbox-supervisor",
-            transport=sandbox_transport,
-        ),
-        conversation_store=control_plane_state.conversation_store,
-        run_store=control_plane_state.run_store,
-        workspace_store=control_plane_state.workspace_store,
-        approval_store=control_plane_state.approval_store,
-        app_state_store=control_plane_state.app_state_store,
+        sandbox_transport=sandbox_transport,
     )
     control_plane_app.state.state = control_plane_state
 
@@ -466,11 +422,9 @@ def test_question_flow_requires_approval_and_approves(
     bucket_name = "code-analyst-approval-test"
     boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
 
-    control_plane_settings = ControlPlaneSettings(
-        s3_endpoint=None,
-        s3_bucket=bucket_name,
-        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
-        sandbox_supervisor_url="http://sandbox-supervisor",
+    control_plane_settings = build_control_plane_settings(
+        tmp_path=tmp_path,
+        bucket_name=bucket_name,
     )
     sandbox_settings = SandboxSupervisorSettings(
         s3_endpoint=None,
@@ -488,29 +442,9 @@ def test_question_flow_requires_approval_and_approves(
     sandbox_supervisor_app.state.state = supervisor_state
 
     sandbox_transport = httpx.ASGITransport(app=sandbox_supervisor_app)
-    control_plane_state = ControlPlaneAppState()
-    control_plane_state.object_store = ControlPlaneObjectStore(control_plane_settings)
-    control_plane_state.workspace_store = WorkspaceStateStore(control_plane_state.object_store)
-    control_plane_state.conversation_store = ConversationStateStore(
-        control_plane_state.object_store
-    )
-    control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
-    control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
-    control_plane_state.app_state_store = AppStateStore(control_plane_state.object_store)
-    control_plane_state.workspace_import_service = WorkspaceImportService(
+    control_plane_state = build_control_plane_state(
         settings=control_plane_settings,
-        object_store=control_plane_state.object_store,
-    )
-    control_plane_state.question_orchestrator = QuestionOrchestrator(
-        sandbox_client=SandboxSupervisorClient(
-            "http://sandbox-supervisor",
-            transport=sandbox_transport,
-        ),
-        conversation_store=control_plane_state.conversation_store,
-        run_store=control_plane_state.run_store,
-        workspace_store=control_plane_state.workspace_store,
-        approval_store=control_plane_state.approval_store,
-        app_state_store=control_plane_state.app_state_store,
+        sandbox_transport=sandbox_transport,
     )
     control_plane_app.state.state = control_plane_state
 
@@ -604,11 +538,9 @@ def test_question_flow_requires_approval_and_denies(
     bucket_name = "code-analyst-approval-deny-test"
     boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
 
-    control_plane_settings = ControlPlaneSettings(
-        s3_endpoint=None,
-        s3_bucket=bucket_name,
-        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
-        sandbox_supervisor_url="http://sandbox-supervisor",
+    control_plane_settings = build_control_plane_settings(
+        tmp_path=tmp_path,
+        bucket_name=bucket_name,
     )
     sandbox_settings = SandboxSupervisorSettings(
         s3_endpoint=None,
@@ -626,29 +558,9 @@ def test_question_flow_requires_approval_and_denies(
     sandbox_supervisor_app.state.state = supervisor_state
 
     sandbox_transport = httpx.ASGITransport(app=sandbox_supervisor_app)
-    control_plane_state = ControlPlaneAppState()
-    control_plane_state.object_store = ControlPlaneObjectStore(control_plane_settings)
-    control_plane_state.workspace_store = WorkspaceStateStore(control_plane_state.object_store)
-    control_plane_state.conversation_store = ConversationStateStore(
-        control_plane_state.object_store
-    )
-    control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
-    control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
-    control_plane_state.app_state_store = AppStateStore(control_plane_state.object_store)
-    control_plane_state.workspace_import_service = WorkspaceImportService(
+    control_plane_state = build_control_plane_state(
         settings=control_plane_settings,
-        object_store=control_plane_state.object_store,
-    )
-    control_plane_state.question_orchestrator = QuestionOrchestrator(
-        sandbox_client=SandboxSupervisorClient(
-            "http://sandbox-supervisor",
-            transport=sandbox_transport,
-        ),
-        conversation_store=control_plane_state.conversation_store,
-        run_store=control_plane_state.run_store,
-        workspace_store=control_plane_state.workspace_store,
-        approval_store=control_plane_state.approval_store,
-        app_state_store=control_plane_state.app_state_store,
+        sandbox_transport=sandbox_transport,
     )
     control_plane_app.state.state = control_plane_state
 

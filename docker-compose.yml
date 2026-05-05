@@ -21,6 +21,11 @@ services:
     environment:
       APP_ENV: local
       APP_NAME: control-plane
+      APP_PUBLIC_URL: http://localhost:3000
+      AUTH_BACKEND: session_cookie
+      AUTH_STORE: sqlite
+      AUTH_SQLITE_PATH: /var/lib/code-analyst/auth/auth.db
+      AUTH_BOOTSTRAP_SECRET: ${AUTH_BOOTSTRAP_SECRET:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       S3_ENDPOINT: http://minio:9000
       S3_REGION: us-east-1
@@ -29,6 +34,8 @@ services:
       S3_SECRET_ACCESS_KEY: minioadmin
       SANDBOX_SUPERVISOR_URL: http://sandbox-supervisor:8090
       SANDBOX_SUPERVISOR_TIMEOUT_SECONDS: 280
+    volumes:
+      - ./control-plane-data:/var/lib/code-analyst
     depends_on:
       - minio
       - minio-init

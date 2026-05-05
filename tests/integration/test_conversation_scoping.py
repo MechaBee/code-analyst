@@ -5,22 +5,17 @@ from pathlib import Path
 
 import boto3
 import pytest
+from control_plane_app.config import Settings
 from control_plane_app.main import app as control_plane_app
 from control_plane_app.main import AppState
-from control_plane_app.config import Settings
-from control_plane_app.object_store import ObjectStore
-from control_plane_app.state_store import (
-    ApprovalStateStore,
-    ConversationStateStore,
-    RunStateStore,
-    WorkspaceStateStore,
-)
-from control_plane_app.app_state_store import AppStateStore
-from control_plane_app.workspace_imports import WorkspaceImportService
-from control_plane_app.question_orchestrator import QuestionOrchestrator
-from control_plane_app.sandbox_supervisor_client import SandboxSupervisorClient
 from fastapi.testclient import TestClient
 from moto import mock_aws
+
+
+def build_test_state(test_settings: Settings) -> AppState:
+    state = AppState(test_settings)
+    control_plane_app.state.state = state
+    return state
 
 
 @pytest.fixture()
@@ -66,33 +61,11 @@ def test_conversation_scoping_flow(
         s3_bucket=bucket_name,
         workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
         sandbox_supervisor_url="http://sandbox-supervisor",
+        auth_backend="header",
+        auth_sqlite_path=str(tmp_path / "auth.db"),
     )
-
-    object_store = ObjectStore(test_settings)
-    app_state_store = AppStateStore(object_store)
-    state = AppState()
-    state.object_store = object_store
-    state.workspace_store = WorkspaceStateStore(object_store)
-    state.conversation_store = ConversationStateStore(object_store)
-    state.run_store = RunStateStore(object_store)
-    state.approval_store = ApprovalStateStore(object_store)
-    state.app_state_store = app_state_store
-    state.workspace_import_service = WorkspaceImportService(
-        settings=test_settings,
-        object_store=object_store,
-    )
-    state.question_orchestrator = QuestionOrchestrator(
-        sandbox_client=SandboxSupervisorClient(
-            test_settings.sandbox_supervisor_url,
-            timeout_seconds=10,
-        ),
-        conversation_store=state.conversation_store,
-        run_store=state.run_store,
-        workspace_store=state.workspace_store,
-        approval_store=state.approval_store,
-        app_state_store=app_state_store,
-    )
-    control_plane_app.state.state = state
+    state = build_test_state(test_settings)
+    object_store = state.object_store
 
     client = TestClient(control_plane_app)
     headers = {
@@ -287,33 +260,10 @@ def test_conversation_requires_repo_def_or_workspace(
         s3_endpoint=None,
         s3_bucket=bucket_name,
         sandbox_supervisor_url="http://sandbox-supervisor",
+        auth_backend="header",
+        auth_sqlite_path=str(tmp_path / "auth.db"),
     )
-
-    object_store = ObjectStore(test_settings)
-    app_state_store = AppStateStore(object_store)
-    state = AppState()
-    state.object_store = object_store
-    state.workspace_store = WorkspaceStateStore(object_store)
-    state.conversation_store = ConversationStateStore(object_store)
-    state.run_store = RunStateStore(object_store)
-    state.approval_store = ApprovalStateStore(object_store)
-    state.app_state_store = app_state_store
-    state.workspace_import_service = WorkspaceImportService(
-        settings=test_settings,
-        object_store=object_store,
-    )
-    state.question_orchestrator = QuestionOrchestrator(
-        sandbox_client=SandboxSupervisorClient(
-            test_settings.sandbox_supervisor_url,
-            timeout_seconds=10,
-        ),
-        conversation_store=state.conversation_store,
-        run_store=state.run_store,
-        workspace_store=state.workspace_store,
-        approval_store=state.approval_store,
-        app_state_store=app_state_store,
-    )
-    control_plane_app.state.state = state
+    state = build_test_state(test_settings)
 
     client = TestClient(control_plane_app)
     headers = {

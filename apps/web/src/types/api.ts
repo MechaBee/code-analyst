@@ -183,6 +183,22 @@ export interface User {
   created_at: string;
 }
 
+export interface AdminUserRecord extends User {
+  has_account: boolean;
+}
+
+export interface PendingRegistrationInvite {
+  invite_id: string;
+  tenant_id: string;
+  email: string;
+  name_hint?: string | null;
+  team_ids: string[];
+  is_admin: boolean;
+  created_by?: string | null;
+  created_at: string;
+  expires_at: string;
+}
+
 export interface Team {
   tenant_id: string;
   team_id: string;
@@ -280,7 +296,64 @@ export interface UserMeResponse {
 
 export interface UserListResponse {
   tenant_id: string;
-  users: User[];
+  users: AdminUserRecord[];
+  pending_invites: PendingRegistrationInvite[];
+}
+
+export interface BootstrapAdminInvitationRequest {
+  email: string;
+  name?: string | null;
+  expires_in_hours?: number | null;
+  bootstrap_secret: string;
+}
+
+export interface RegistrationInviteCreateRequest {
+  email: string;
+  name?: string | null;
+  team_ids?: string[];
+  is_admin?: boolean;
+  expires_in_hours?: number | null;
+}
+
+export interface RegistrationInviteCreateResponse {
+  tenant_id: string;
+  email: string;
+  invite_url: string;
+  expires_at: string;
+}
+
+export interface RegistrationInvitePreviewResponse {
+  tenant_id: string;
+  email: string;
+  name_hint?: string | null;
+  team_ids: string[];
+  is_admin: boolean;
+  expires_at: string;
+}
+
+export interface RegistrationConsumeRequest {
+  token: string;
+  name?: string | null;
+}
+
+export interface SignInLinkCreateRequest {
+  email: string;
+  expires_in_hours?: number | null;
+}
+
+export interface SignInLinkCreateResponse {
+  tenant_id: string;
+  email: string;
+  sign_in_url: string;
+  expires_at: string;
+}
+
+export interface SignInConsumeRequest {
+  token: string;
+}
+
+export interface LogoutResponse {
+  status: string;
 }
 
 export interface RepositoryDefinitionCreateRequest {

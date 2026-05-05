@@ -14,7 +14,7 @@ import NavBar from './NavBar';
 export default function AdminTeamDetail() {
   const params = useParams<{ teamId: string }>();
   const teamId = params.teamId;
-  const { isAdmin, email, isLoading: authLoading } = useAuth();
+  const { isAdmin, isAuthenticated, email, isLoading: authLoading } = useAuth();
   const api = useApi();
 
   const [detail, setDetail] = useState<TeamDetailResponse | null>(null);
@@ -31,7 +31,7 @@ export default function AdminTeamDetail() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    if (!isAdmin || !teamId) {
+    if (!isAuthenticated || !isAdmin || !teamId) {
       setLoading(false);
       return;
     }
@@ -67,7 +67,7 @@ export default function AdminTeamDetail() {
     return () => {
       cancelled = true;
     };
-  }, [api, isAdmin, refreshKey, teamId]);
+  }, [api, isAdmin, isAuthenticated, refreshKey, teamId]);
 
   const refresh = () => setRefreshKey((value) => value + 1);
 
@@ -185,6 +185,21 @@ export default function AdminTeamDetail() {
   }
 
   if (!isAdmin) {
+    if (!isAuthenticated) {
+      return (
+        <div className="min-h-screen bg-cream">
+          <NavBar active="admin" />
+          <div className="mx-auto max-w-2xl px-6 py-16">
+            <div className="rounded-3xl border border-line bg-panel p-8 text-center shadow-sm">
+              <h1 className="text-2xl font-semibold text-ink">Sign-In Required</h1>
+              <p className="mt-3 text-sm text-muted">
+                Use an admin access link to manage team membership.
+              </p>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="min-h-screen bg-cream">
         <NavBar active="admin" />

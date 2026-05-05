@@ -406,9 +406,87 @@ class UserMeResponse(BaseModel):
     is_admin: bool = False
 
 
+class AdminUserRecord(BaseModel):
+    tenant_id: str
+    email: str
+    name: str | None = None
+    is_admin: bool = False
+    created_at: datetime
+    has_account: bool = False
+
+
+class PendingRegistrationInvite(BaseModel):
+    invite_id: str
+    tenant_id: str
+    email: str
+    name_hint: str | None = None
+    team_ids: list[str] = Field(default_factory=list)
+    is_admin: bool = False
+    created_by: str | None = None
+    created_at: datetime
+    expires_at: datetime
+
+
 class UserListResponse(BaseModel):
     tenant_id: str
-    users: list[User]
+    users: list[AdminUserRecord]
+    pending_invites: list[PendingRegistrationInvite] = Field(default_factory=list)
+
+
+class BootstrapAdminInvitationRequest(BaseModel):
+    email: str
+    name: str | None = None
+    expires_in_hours: int | None = None
+    bootstrap_secret: str
+
+
+class RegistrationInviteCreateRequest(BaseModel):
+    email: str
+    name: str | None = None
+    team_ids: list[str] = Field(default_factory=list)
+    is_admin: bool = False
+    expires_in_hours: int | None = None
+
+
+class RegistrationInviteCreateResponse(BaseModel):
+    tenant_id: str
+    email: str
+    invite_url: str
+    expires_at: datetime
+
+
+class RegistrationInvitePreviewResponse(BaseModel):
+    tenant_id: str
+    email: str
+    name_hint: str | None = None
+    team_ids: list[str] = Field(default_factory=list)
+    is_admin: bool = False
+    expires_at: datetime
+
+
+class RegistrationConsumeRequest(BaseModel):
+    token: str
+    name: str | None = None
+
+
+class SignInLinkCreateRequest(BaseModel):
+    email: str
+    expires_in_hours: int | None = None
+
+
+class SignInLinkCreateResponse(BaseModel):
+    tenant_id: str
+    email: str
+    sign_in_url: str
+    expires_at: datetime
+
+
+class SignInConsumeRequest(BaseModel):
+    token: str
+
+
+class LogoutResponse(BaseModel):
+    status: str = "ok"
 
 
 class RepositoryDefinitionCreateRequest(BaseModel):

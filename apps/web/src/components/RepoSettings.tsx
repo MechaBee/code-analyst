@@ -17,7 +17,7 @@ type RepoAction = 'archive' | 'restore' | null;
 export default function RepoSettings() {
   const params = useParams<{ repoDefId: string }>();
   const repoDefId = params.repoDefId;
-  const { isAdmin, isLoading: authLoading } = useAuth();
+  const { isAdmin, isAuthenticated, isLoading: authLoading } = useAuth();
   const api = useApi();
 
   const [repo, setRepo] = useState<RepositoryDefinition | null>(null);
@@ -36,7 +36,7 @@ export default function RepoSettings() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    if (authLoading || !isAdmin || !repoDefId) {
+    if (authLoading || !isAuthenticated || !isAdmin || !repoDefId) {
       setLoading(authLoading);
       return;
     }
@@ -79,7 +79,7 @@ export default function RepoSettings() {
     return () => {
       cancelled = true;
     };
-  }, [api, authLoading, isAdmin, refreshKey, repoDefId]);
+  }, [api, authLoading, isAdmin, isAuthenticated, refreshKey, repoDefId]);
 
   const refresh = () => setRefreshKey((value) => value + 1);
 
@@ -176,6 +176,21 @@ export default function RepoSettings() {
   }
 
   if (!isAdmin) {
+    if (!isAuthenticated) {
+      return (
+        <div className="min-h-screen bg-cream">
+          <NavBar active="repos" />
+          <div className="mx-auto max-w-2xl px-6 py-16">
+            <div className="rounded-3xl border border-line bg-panel p-8 text-center shadow-sm">
+              <h1 className="text-2xl font-semibold text-ink">Sign-In Required</h1>
+              <p className="mt-3 text-sm text-muted">
+                Use an admin sign-in link to manage repository settings.
+              </p>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="min-h-screen bg-cream">
         <NavBar active="repos" />

@@ -10,7 +10,7 @@ interface NavBarProps {
 }
 
 export default function NavBar({ active }: NavBarProps) {
-  const { email, isAdmin, logout } = useAuth();
+  const { email, isAdmin, isAuthenticated, logout } = useAuth();
 
   const navItem = (href: string, label: string, key?: string) => (
     <Link
@@ -32,19 +32,30 @@ export default function NavBar({ active }: NavBarProps) {
             Code Analyst
           </Link>
           <nav className="flex items-center gap-4">
-            {navItem('/dashboard', 'Dashboard', 'dashboard')}
-            {navItem('/repos', 'Repositories', 'repos')}
+            {isAuthenticated && navItem('/dashboard', 'Dashboard', 'dashboard')}
+            {isAuthenticated && navItem('/repos', 'Repositories', 'repos')}
             {isAdmin && navItem('/admin', 'Admin', 'admin')}
           </nav>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-muted">{email}</span>
-          <button
-            onClick={logout}
-            className="rounded-md px-2 py-1 text-xs font-medium text-muted transition hover:text-ink"
-          >
-            Logout
-          </button>
+          {isAuthenticated ? (
+            <>
+              <span className="text-xs text-muted">{email}</span>
+              <button
+                onClick={() => void logout()}
+                className="rounded-md px-2 py-1 text-xs font-medium text-muted transition hover:text-ink"
+              >
+                Logout
+              </button>
+            </>
+          ) : (
+            <Link
+              href="/auth/sign-in"
+              className="rounded-md px-2 py-1 text-xs font-medium text-muted transition hover:text-ink"
+            >
+              Sign In
+            </Link>
+          )}
         </div>
       </div>
     </header>

@@ -1,9 +1,11 @@
 import { useMemo } from 'react';
 
 import type {
+  BootstrapAdminInvitationRequest,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
   AdminTeamListResponse,
+  LogoutResponse,
   Checkout,
   CheckoutCreateRequest,
   CheckoutCreateResponse,
@@ -17,6 +19,10 @@ import type {
   HealthResponse,
   QuestionRequest,
   QuestionResponse,
+  RegistrationConsumeRequest,
+  RegistrationInviteCreateRequest,
+  RegistrationInviteCreateResponse,
+  RegistrationInvitePreviewResponse,
   RepositoryDefinition,
   RepositoryDefinitionCreateRequest,
   RepositoryDefinitionCreateResponse,
@@ -24,6 +30,9 @@ import type {
   RepositoryDefinitionUpdateRequest,
   RepositoryDefinitionUpdateTeamsRequest,
   RepositoryDefinitionUpdateTeamsResponse,
+  SignInConsumeRequest,
+  SignInLinkCreateRequest,
+  SignInLinkCreateResponse,
   TeamCreateRequest,
   TeamCreateResponse,
   TeamDetailResponse,
@@ -42,19 +51,17 @@ import type {
 const API_BASE = '/api';
 
 function getAuthHeaders(): Record<string, string> {
-  // In local mode, read from env or static config
   const tenantId = process.env.NEXT_PUBLIC_TENANT_ID || 'tenant_local';
-  const userEmail = process.env.NEXT_PUBLIC_USER_EMAIL || 'user@tenant.local';
   return {
     'Content-Type': 'application/json',
     'X-Tenant-Id': tenantId,
-    'X-User-Email': userEmail,
   };
 }
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: getAuthHeaders(),
+    credentials: 'same-origin',
     ...options,
   });
   if (!res.ok) {
@@ -120,6 +127,41 @@ export function useApi() {
         apiFetch<UserCreateResponse>('/v1/users', {
           method: 'POST',
           body: JSON.stringify(req),
+        }),
+
+      // Auth
+      createBootstrapAdminInvitation: (req: BootstrapAdminInvitationRequest) =>
+        apiFetch<RegistrationInviteCreateResponse>('/v1/auth/bootstrap/invitations', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      createRegistrationInvite: (req: RegistrationInviteCreateRequest) =>
+        apiFetch<RegistrationInviteCreateResponse>('/v1/auth/invitations', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      previewRegistrationInvite: (token: string) =>
+        apiFetch<RegistrationInvitePreviewResponse>(
+          `/v1/auth/registration/preview?token=${encodeURIComponent(token)}`
+        ),
+      consumeRegistrationInvite: (req: RegistrationConsumeRequest) =>
+        apiFetch<UserMeResponse>('/v1/auth/register/consume', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      createSignInLink: (req: SignInLinkCreateRequest) =>
+        apiFetch<SignInLinkCreateResponse>('/v1/auth/sign-in-links', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      consumeSignInLink: (req: SignInConsumeRequest) =>
+        apiFetch<UserMeResponse>('/v1/auth/sign-in/consume', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      logout: () =>
+        apiFetch<LogoutResponse>('/v1/auth/logout', {
+          method: 'POST',
         }),
 
       // Phase 1: Teams

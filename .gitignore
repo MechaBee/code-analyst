@@ -23,3 +23,4 @@ minio-data/
 htmlcov/
 *.log
 .secrets/
+control-plane-data/

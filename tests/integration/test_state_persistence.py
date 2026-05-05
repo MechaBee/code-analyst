@@ -8,21 +8,11 @@ import boto3
 import httpx
 import pytest
 from code_analyst_contracts import ConversationCreateRequest
-from control_plane_app.app_state_store import AppStateStore
-from control_plane_app.app_state_store import AppStateStore
 from control_plane_app.config import Settings as ControlPlaneSettings
 from control_plane_app.main import AppState as ControlPlaneAppState
 from control_plane_app.main import app as control_plane_app
-from control_plane_app.object_store import ObjectStore as ControlPlaneObjectStore
 from control_plane_app.question_orchestrator import QuestionOrchestrator
 from control_plane_app.sandbox_supervisor_client import SandboxSupervisorClient
-from control_plane_app.state_store import (
-    ApprovalStateStore,
-    ConversationStateStore,
-    RunStateStore,
-    WorkspaceStateStore,
-)
-from control_plane_app.workspace_imports import WorkspaceImportService
 from fastapi.testclient import TestClient
 from moto import mock_aws
 from sandbox_supervisor_app.analysis_adapter import DeterministicAnalysisAdapter
@@ -31,6 +21,17 @@ from sandbox_supervisor_app.main import AppState as SandboxSupervisorAppState
 from sandbox_supervisor_app.main import app as sandbox_supervisor_app
 from sandbox_supervisor_app.object_store import ObjectStore as SandboxObjectStore
 from sandbox_supervisor_app.workspace_materializer import WorkspaceMaterializer
+
+
+def build_control_plane_settings(*, tmp_path: Path, bucket_name: str) -> ControlPlaneSettings:
+    return ControlPlaneSettings(
+        s3_endpoint=None,
+        s3_bucket=bucket_name,
+        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
+        sandbox_supervisor_url="http://sandbox-supervisor",
+        auth_backend="header",
+        auth_sqlite_path=str(tmp_path / "control-plane-auth.db"),
+    )
 
 
 @pytest.fixture()
@@ -68,17 +69,7 @@ def build_control_plane_state(
     settings: ControlPlaneSettings,
     sandbox_transport: httpx.ASGITransport,
 ) -> ControlPlaneAppState:
-    state = ControlPlaneAppState()
-    state.object_store = ControlPlaneObjectStore(settings)
-    state.workspace_store = WorkspaceStateStore(state.object_store)
-    state.conversation_store = ConversationStateStore(state.object_store)
-    state.run_store = RunStateStore(state.object_store)
-    state.approval_store = ApprovalStateStore(state.object_store)
-    state.app_state_store = AppStateStore(state.object_store)
-    state.workspace_import_service = WorkspaceImportService(
-        settings=settings,
-        object_store=state.object_store,
-    )
+    state = ControlPlaneAppState(settings)
     state.question_orchestrator = QuestionOrchestrator(
         sandbox_client=SandboxSupervisorClient(
             settings.sandbox_supervisor_url,
@@ -101,11 +92,9 @@ def test_state_persists_across_control_plane_restart(
     bucket_name = "code-analyst-persistence"
     boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
 
-    control_plane_settings = ControlPlaneSettings(
-        s3_endpoint=None,
-        s3_bucket=bucket_name,
-        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
-        sandbox_supervisor_url="http://sandbox-supervisor",
+    control_plane_settings = build_control_plane_settings(
+        tmp_path=tmp_path,
+        bucket_name=bucket_name,
     )
     sandbox_settings = SandboxSupervisorSettings(
         s3_endpoint=None,

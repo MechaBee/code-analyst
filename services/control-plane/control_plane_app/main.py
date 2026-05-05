@@ -7,9 +7,11 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from code_analyst_contracts import (
+    AdminUserRecord,
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
     AdminTeamListResponse,
+    BootstrapAdminInvitationRequest,
     Checkout,
     CheckoutCreateRequest,
     CheckoutCreateResponse,
@@ -21,6 +23,11 @@ from code_analyst_contracts import (
     ConversationListResponse,
     ConversationUpdateRequest,
     HealthResponse,
+    LogoutResponse,
+    RegistrationConsumeRequest,
+    RegistrationInviteCreateRequest,
+    RegistrationInviteCreateResponse,
+    RegistrationInvitePreviewResponse,
     QuestionRequest,
     QuestionResponse,
     RepositoryDefinition,
@@ -30,6 +37,9 @@ from code_analyst_contracts import (
     RepositoryDefinitionUpdateRequest,
     RepositoryDefinitionUpdateTeamsRequest,
     RepositoryDefinitionUpdateTeamsResponse,
+    SignInConsumeRequest,
+    SignInLinkCreateRequest,
+    SignInLinkCreateResponse,
     RepositoryAdapter,
     RepositoryAdapterUpdateRequest,
     Team,
@@ -53,10 +63,22 @@ from code_analyst_contracts import (
 )
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from .app_state_store import AppStateStore
-from .config import settings
+from .auth import (
+    AuthConflictError,
+    AuthError,
+    AuthForbiddenError,
+    AuthNotFoundError,
+    AuthService,
+    AuthTokenExpiredError,
+    AuthTokenUsedError,
+    build_auth_store,
+    build_request_auth_backend,
+    normalize_email,
+)
+from .config import Settings, settings
 from .object_store import ObjectStore
 from .question_orchestrator import QuestionOrchestrator
 from .repository_checkout import build_repository_checkout_service
@@ -79,27 +101,38 @@ def new_id(prefix: str) -> str:
 
 
 class AppState:
-    def __init__(self) -> None:
-        self.object_store = ObjectStore(settings)
+    def __init__(self, app_settings: Settings = settings) -> None:
+        self.settings = app_settings
+        self.object_store = ObjectStore(app_settings)
         self.workspace_store = WorkspaceStateStore(self.object_store)
         self.conversation_store = ConversationStateStore(self.object_store)
         self.run_store = RunStateStore(self.object_store)
         self.approval_store = ApprovalStateStore(self.object_store)
         self.app_state_store = AppStateStore(self.object_store)
-        self.secret_store = build_secret_store(settings)
+        self.auth_store = build_auth_store(app_settings)
+        self.auth_service = AuthService(
+            settings=app_settings,
+            store=self.auth_store,
+            app_state_store=self.app_state_store,
+        )
+        self.request_auth_backend = build_request_auth_backend(
+            app_settings,
+            auth_service=self.auth_service,
+        )
+        self.secret_store = build_secret_store(app_settings)
         self.repository_checkout_service = build_repository_checkout_service(
-            settings,
+            app_settings,
             secret_store=self.secret_store,
         )
         self.workspace_import_service = WorkspaceImportService(
-            settings=settings,
+            settings=app_settings,
             object_store=self.object_store,
             repository_checkout_service=self.repository_checkout_service,
         )
         self.question_orchestrator = QuestionOrchestrator(
             sandbox_client=SandboxSupervisorClient(
-                settings.sandbox_supervisor_url,
-                timeout_seconds=settings.sandbox_supervisor_timeout_seconds,
+                app_settings.sandbox_supervisor_url,
+                timeout_seconds=app_settings.sandbox_supervisor_timeout_seconds,
             ),
             conversation_store=self.conversation_store,
             run_store=self.run_store,
@@ -398,43 +431,38 @@ async def resolve_approval(
 # ---------------------------------------------------------------------------
 
 
-def get_principal(request: Request) -> tuple[str, str]:
-    """Extract tenant_id and user_email from request headers."""
-    tenant_id = request.headers.get("X-Tenant-Id")
-    user_email = request.headers.get("X-User-Email")
-    if not tenant_id or not user_email:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing X-Tenant-Id or X-User-Email header.",
-        )
-    return tenant_id, user_email
+def get_requested_tenant_id(request: Request) -> str:
+    tenant_id = (request.headers.get("X-Tenant-Id") or "").strip()
+    if not tenant_id:
+        raise HTTPException(status_code=401, detail="Missing X-Tenant-Id header.")
+    return tenant_id
 
 
 async def ensure_user(request: Request) -> User:
-    tenant_id, user_email = get_principal(request)
-    db = app.state.state.app_state_store.load_tenant_db(tenant_id)
-    has_admin = any(existing.is_admin for existing in db.users.values())
-    user = db.users.get(user_email)
-    if user is None:
-        user = User(
-            tenant_id=tenant_id,
-            email=user_email,
-            # Self-bootstrap the first effective principal for empty or
-            # admin-less tenants so the local UI can recover into the
-            # team/repo setup flow.
-            is_admin=not has_admin,
-        )
-        user = await run_in_threadpool(
-            app.state.state.app_state_store.upsert_user,
-            user,
-        )
-    elif not has_admin and not user.is_admin:
-        user = user.model_copy(update={"is_admin": True})
-        user = await run_in_threadpool(
-            app.state.state.app_state_store.upsert_user,
-            user,
-        )
-    return user
+    return await run_in_threadpool(
+        app.state.state.request_auth_backend.authenticate_request,
+        request=request,
+        app_state_store=app.state.state.app_state_store,
+    )
+
+
+def raise_for_auth_error(error: AuthError) -> None:
+    if isinstance(error, AuthForbiddenError):
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    if isinstance(error, AuthConflictError):
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if isinstance(error, (AuthTokenExpiredError, AuthTokenUsedError)):
+        raise HTTPException(status_code=410, detail=str(error)) from error
+    if isinstance(error, AuthNotFoundError):
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def normalize_email_or_400(email: str) -> str:
+    try:
+        return normalize_email(email)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 def require_admin(principal: User) -> None:
@@ -660,6 +688,174 @@ async def apply_repo_definition_update(
 
 
 # ---------------------------------------------------------------------------
+# Auth Endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/v1/auth/bootstrap/invitations",
+    response_model=RegistrationInviteCreateResponse,
+)
+async def create_bootstrap_admin_invitation(
+    request: Request,
+    body: BootstrapAdminInvitationRequest,
+) -> RegistrationInviteCreateResponse:
+    tenant_id = get_requested_tenant_id(request)
+    try:
+        invite_url, expires_at = await run_in_threadpool(
+            app.state.state.auth_service.create_bootstrap_admin_invitation,
+            tenant_id=tenant_id,
+            email=body.email,
+            name=body.name,
+            expires_in_hours=body.expires_in_hours,
+            bootstrap_secret=body.bootstrap_secret,
+        )
+    except AuthError as error:
+        raise_for_auth_error(error)
+    return RegistrationInviteCreateResponse(
+        tenant_id=tenant_id,
+        email=normalize_email_or_400(body.email),
+        invite_url=invite_url,
+        expires_at=expires_at,
+    )
+
+
+@app.post("/v1/auth/invitations", response_model=RegistrationInviteCreateResponse)
+async def create_registration_invitation(
+    request: Request,
+    body: RegistrationInviteCreateRequest,
+) -> RegistrationInviteCreateResponse:
+    principal = await ensure_user(request)
+    require_admin(principal)
+    team_ids = normalize_team_ids(principal.tenant_id, body.team_ids)
+    try:
+        invite_url, expires_at = await run_in_threadpool(
+            app.state.state.auth_service.create_registration_invitation,
+            tenant_id=principal.tenant_id,
+            email=body.email,
+            name=body.name,
+            team_ids=team_ids,
+            is_admin=body.is_admin,
+            created_by=principal.email,
+            expires_in_hours=body.expires_in_hours,
+        )
+    except AuthError as error:
+        raise_for_auth_error(error)
+    return RegistrationInviteCreateResponse(
+        tenant_id=principal.tenant_id,
+        email=normalize_email_or_400(body.email),
+        invite_url=invite_url,
+        expires_at=expires_at,
+    )
+
+
+@app.get(
+    "/v1/auth/registration/preview",
+    response_model=RegistrationInvitePreviewResponse,
+)
+async def preview_registration_invitation(
+    token: str,
+) -> RegistrationInvitePreviewResponse:
+    try:
+        invite = await run_in_threadpool(
+            app.state.state.auth_service.preview_registration_invitation,
+            token=token,
+        )
+    except AuthError as error:
+        raise_for_auth_error(error)
+    return RegistrationInvitePreviewResponse(
+        tenant_id=invite.tenant_id,
+        email=invite.email,
+        name_hint=invite.name_hint,
+        team_ids=invite.team_ids,
+        is_admin=invite.is_admin,
+        expires_at=invite.expires_at,
+    )
+
+
+@app.post("/v1/auth/register/consume", response_model=UserMeResponse)
+async def consume_registration_invitation(
+    body: RegistrationConsumeRequest,
+    response: Response,
+) -> UserMeResponse:
+    try:
+        user, session_token = await run_in_threadpool(
+            app.state.state.auth_service.consume_registration_invitation,
+            token=body.token,
+            name=body.name,
+        )
+    except AuthError as error:
+        raise_for_auth_error(error)
+
+    app.state.state.auth_service.set_session_cookie(response, token=session_token)
+    return UserMeResponse(
+        tenant_id=user.tenant_id,
+        email=user.email,
+        name=user.name,
+        is_admin=user.is_admin,
+    )
+
+
+@app.post("/v1/auth/sign-in-links", response_model=SignInLinkCreateResponse)
+async def create_sign_in_link(
+    request: Request,
+    body: SignInLinkCreateRequest,
+) -> SignInLinkCreateResponse:
+    principal = await ensure_user(request)
+    require_admin(principal)
+    try:
+        sign_in_url, expires_at = await run_in_threadpool(
+            app.state.state.auth_service.create_sign_in_link,
+            tenant_id=principal.tenant_id,
+            email=body.email,
+            expires_in_hours=body.expires_in_hours,
+        )
+    except AuthError as error:
+        raise_for_auth_error(error)
+    return SignInLinkCreateResponse(
+        tenant_id=principal.tenant_id,
+        email=normalize_email_or_400(body.email),
+        sign_in_url=sign_in_url,
+        expires_at=expires_at,
+    )
+
+
+@app.post("/v1/auth/sign-in/consume", response_model=UserMeResponse)
+async def consume_sign_in_link(
+    body: SignInConsumeRequest,
+    response: Response,
+) -> UserMeResponse:
+    try:
+        user, session_token = await run_in_threadpool(
+            app.state.state.auth_service.consume_sign_in_link,
+            token=body.token,
+        )
+    except AuthError as error:
+        raise_for_auth_error(error)
+
+    app.state.state.auth_service.set_session_cookie(response, token=session_token)
+    return UserMeResponse(
+        tenant_id=user.tenant_id,
+        email=user.email,
+        name=user.name,
+        is_admin=user.is_admin,
+    )
+
+
+@app.post("/v1/auth/logout", response_model=LogoutResponse)
+async def logout(
+    request: Request,
+    response: Response,
+) -> LogoutResponse:
+    await run_in_threadpool(
+        app.state.state.auth_service.logout_session,
+        token=request.cookies.get(app.state.state.settings.auth_cookie_name),
+    )
+    app.state.state.auth_service.clear_session_cookie(response)
+    return LogoutResponse()
+
+
+# ---------------------------------------------------------------------------
 # Admin & Identity Endpoints
 # ---------------------------------------------------------------------------
 
@@ -671,9 +867,8 @@ async def create_team(
 ) -> TeamCreateResponse:
     principal = await ensure_user(request)
     require_admin(principal)
-    tenant_id, _ = get_principal(request)
     team = Team(
-        tenant_id=tenant_id,
+        tenant_id=principal.tenant_id,
         team_id=new_id("team"),
         name=normalize_team_name(body.name),
     )
@@ -711,9 +906,28 @@ async def list_admin_users(request: Request) -> UserListResponse:
         app.state.state.app_state_store.list_users,
         principal.tenant_id,
     )
+    registered_emails = await run_in_threadpool(
+        app.state.state.auth_service.registered_emails,
+        tenant_id=principal.tenant_id,
+    )
+    pending_invites = await run_in_threadpool(
+        app.state.state.auth_service.list_pending_registration_invites,
+        tenant_id=principal.tenant_id,
+    )
     return UserListResponse(
         tenant_id=principal.tenant_id,
-        users=sorted(users, key=lambda user: (user.email.lower(), user.created_at)),
+        users=[
+            AdminUserRecord(
+                tenant_id=user.tenant_id,
+                email=user.email,
+                name=user.name,
+                is_admin=user.is_admin,
+                created_at=user.created_at,
+                has_account=user.email in registered_emails,
+            )
+            for user in sorted(users, key=lambda user: (user.email.lower(), user.created_at))
+        ],
+        pending_invites=pending_invites,
     )
 
 
@@ -832,7 +1046,7 @@ async def add_team_member(
             app.state.state.app_state_store.add_team_membership,
             tenant_id,
             team_id,
-            body.user_email.strip(),
+            normalize_email_or_400(body.user_email),
         )
     except KeyError as error:
         detail = str(error).strip("'")
@@ -857,7 +1071,7 @@ async def remove_team_member(
             app.state.state.app_state_store.remove_team_membership,
             tenant_id,
             team_id,
-            user_email,
+            normalize_email_or_400(user_email),
         )
     except KeyError as error:
         raise HTTPException(status_code=404, detail="Membership not found.") from error
@@ -881,26 +1095,28 @@ async def create_user(
     request: Request,
     body: UserCreateRequest,
 ) -> UserCreateResponse:
-    tenant_id = request.headers.get("X-Tenant-Id")
-    if not tenant_id:
-        raise HTTPException(status_code=401, detail="Missing X-Tenant-Id header.")
+    if app.state.state.request_auth_backend.kind == "header":
+        tenant_id = get_requested_tenant_id(request)
+        principal_email = request.headers.get("X-User-Email")
+        if not principal_email:
+            raise HTTPException(status_code=401, detail="Missing X-User-Email header.")
+        principal_email = normalize_email_or_400(principal_email)
 
-    principal = request.headers.get("X-User-Email")
-    if not principal:
-        raise HTTPException(status_code=401, detail="Missing X-User-Email header.")
+        db = app.state.state.app_state_store.load_tenant_db(tenant_id)
+        is_bootstrap = not any(user.is_admin for user in db.users.values())
+        if not is_bootstrap:
+            existing_principal = app.state.state.app_state_store.get_user(
+                tenant_id,
+                principal_email,
+            )
+            if not existing_principal or not existing_principal.is_admin:
+                raise HTTPException(status_code=403, detail="Admin access required.")
+    else:
+        principal = await ensure_user(request)
+        require_admin(principal)
+        tenant_id = principal.tenant_id
 
-    # Bootstrap: if tenant has no admins, allow recovery without an admin check.
-    db = app.state.state.app_state_store.load_tenant_db(tenant_id)
-    is_bootstrap = not any(user.is_admin for user in db.users.values())
-
-    if not is_bootstrap:
-        existing_principal = app.state.state.app_state_store.get_user(tenant_id, principal)
-        if not existing_principal or not existing_principal.is_admin:
-            raise HTTPException(status_code=403, detail="Admin access required.")
-
-    email = body.email.strip()
-    if not email:
-        raise HTTPException(status_code=400, detail="Email is required.")
+    email = normalize_email_or_400(body.email)
 
     user = User(
         tenant_id=tenant_id,

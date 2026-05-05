@@ -11,7 +11,7 @@ import type { RepositoryDefinition, ConversationHead, Checkout } from '@/types/a
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { email, isLoading: authLoading } = useAuth();
+  const { email, isAuthenticated, isLoading: authLoading } = useAuth();
   const api = useApi();
   const { setConversationContext, setWorkspace } = useAppState();
 
@@ -26,6 +26,11 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      setLoading(false);
+      return;
+    }
+
     async function load() {
       try {
         const [repoRes, convRes] = await Promise.all([
@@ -48,7 +53,7 @@ export default function DashboardPage() {
       }
     }
     load();
-  }, [api]);
+  }, [api, isAuthenticated]);
 
   const repoNames = React.useMemo(() => {
     return repos.reduce<Record<string, string>>((acc, r) => {
@@ -112,6 +117,22 @@ export default function DashboardPage() {
       <div className="min-h-screen bg-cream">
         <NavBar active="dashboard" />
         <div className="mx-auto max-w-6xl px-6 py-10 text-sm text-muted">Loading…</div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-cream">
+        <NavBar active="dashboard" />
+        <div className="mx-auto max-w-2xl px-6 py-16">
+          <div className="rounded-3xl border border-line bg-panel p-8 text-center shadow-sm">
+            <h1 className="text-2xl font-semibold text-ink">Access Link Required</h1>
+            <p className="mt-3 text-sm text-muted">
+              Ask your admin to send you a registration or sign-in link.
+            </p>
+          </div>
+        </div>
       </div>
     );
   }

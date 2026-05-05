@@ -24,7 +24,7 @@ type RepoActionTarget =
   | null;
 
 export default function RepoManager() {
-  const { isAdmin, isLoading: authLoading } = useAuth();
+  const { isAdmin, isAuthenticated, isLoading: authLoading } = useAuth();
   const api = useApi();
 
   const [repos, setRepos] = useState<RepositoryDefinition[]>([]);
@@ -46,6 +46,10 @@ export default function RepoManager() {
 
   useEffect(() => {
     if (authLoading) {
+      return;
+    }
+    if (!isAuthenticated) {
+      setPageLoading(false);
       return;
     }
 
@@ -101,7 +105,23 @@ export default function RepoManager() {
     return () => {
       cancelled = true;
     };
-  }, [api, authLoading, isAdmin, refreshKey]);
+  }, [api, authLoading, isAdmin, isAuthenticated, refreshKey]);
+
+  if (!authLoading && !isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-cream">
+        <NavBar active="repos" />
+        <div className="mx-auto max-w-2xl px-6 py-16">
+          <div className="rounded-3xl border border-line bg-panel p-8 text-center shadow-sm">
+            <h1 className="text-2xl font-semibold text-ink">Sign-In Required</h1>
+            <p className="mt-3 text-sm text-muted">
+              Use a registration or sign-in link to view repositories.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const refresh = () => setRefreshKey((value) => value + 1);
 

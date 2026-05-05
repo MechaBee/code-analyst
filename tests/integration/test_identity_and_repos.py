@@ -1,63 +1,45 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import boto3
 import pytest
+from control_plane_app.config import Settings
+from control_plane_app.main import AppState
 from control_plane_app.main import app as control_plane_app
 from fastapi.testclient import TestClient
 from moto import mock_aws
 
 
+def build_test_settings(
+    *,
+    bucket_name: str,
+    tmp_path: Path,
+    secret_store_s3_bucket: str | None = None,
+) -> Settings:
+    return Settings(
+        s3_endpoint=None,
+        s3_bucket=bucket_name,
+        secret_store_s3_bucket=secret_store_s3_bucket,
+        sandbox_supervisor_url="http://sandbox-supervisor",
+        auth_backend="header",
+        auth_sqlite_path=str(tmp_path / "auth.db"),
+    )
+
+
+def build_test_state(test_settings: Settings) -> AppState:
+    state = AppState(test_settings)
+    control_plane_app.state.state = state
+    return state
+
+
 @mock_aws
-def test_identity_and_repo_flow() -> None:
+def test_identity_and_repo_flow(tmp_path: Path) -> None:
     bucket_name = "code-analyst-identity-test"
     boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
 
-    # We need to override settings so the test S3 bucket and no endpoint is used.
-    from control_plane_app.config import Settings
-    from control_plane_app.object_store import ObjectStore
-    from control_plane_app.app_state_store import AppStateStore
-    from control_plane_app.state_store import (
-        ApprovalStateStore,
-        ConversationStateStore,
-        RunStateStore,
-        WorkspaceStateStore,
-    )
-    from control_plane_app.workspace_imports import WorkspaceImportService
-    from control_plane_app.question_orchestrator import QuestionOrchestrator
-    from control_plane_app.sandbox_supervisor_client import SandboxSupervisorClient
-
-    test_settings = Settings(
-        s3_endpoint=None,
-        s3_bucket=bucket_name,
-        sandbox_supervisor_url="http://sandbox-supervisor",
-    )
-    object_store = ObjectStore(test_settings)
-
-    from control_plane_app.main import AppState
-
-    state = AppState()
-    state.object_store = object_store
-    state.workspace_store = WorkspaceStateStore(object_store)
-    state.conversation_store = ConversationStateStore(object_store)
-    state.run_store = RunStateStore(object_store)
-    state.approval_store = ApprovalStateStore(object_store)
-    state.app_state_store = AppStateStore(object_store)
-    state.workspace_import_service = WorkspaceImportService(
-        settings=test_settings,
-        object_store=object_store,
-    )
-    state.question_orchestrator = QuestionOrchestrator(
-        sandbox_client=SandboxSupervisorClient(
-            test_settings.sandbox_supervisor_url,
-            timeout_seconds=10,
-        ),
-        conversation_store=state.conversation_store,
-        run_store=state.run_store,
-        workspace_store=state.workspace_store,
-        approval_store=state.approval_store,
-        app_state_store=state.app_state_store,
-    )
-    control_plane_app.state.state = state
+    test_settings = build_test_settings(bucket_name=bucket_name, tmp_path=tmp_path)
+    state = build_test_state(test_settings)
 
     client = TestClient(control_plane_app)
     headers = {
@@ -304,7 +286,6 @@ def test_identity_and_repo_flow() -> None:
     assert len(admin_repos_after.json()["repo_definitions"]) == 1
 
     # 10. Verify app_state.json was persisted
-    from control_plane_app.app_state_store import AppStateStore
     db = state.app_state_store.load_tenant_db("tenant_test")
     assert "admin@test.com" in db.users
     assert "member@test.com" in db.users
@@ -313,55 +294,12 @@ def test_identity_and_repo_flow() -> None:
 
 
 @mock_aws
-def test_get_me_recovers_admin_for_adminless_tenant() -> None:
+def test_get_me_recovers_admin_for_adminless_tenant(tmp_path: Path) -> None:
     bucket_name = "code-analyst-bootstrap-test"
     boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
 
-    from control_plane_app.config import Settings
-    from control_plane_app.object_store import ObjectStore
-    from control_plane_app.app_state_store import AppStateStore
-    from control_plane_app.state_store import (
-        ApprovalStateStore,
-        ConversationStateStore,
-        RunStateStore,
-        WorkspaceStateStore,
-    )
-    from control_plane_app.workspace_imports import WorkspaceImportService
-    from control_plane_app.question_orchestrator import QuestionOrchestrator
-    from control_plane_app.sandbox_supervisor_client import SandboxSupervisorClient
-
-    test_settings = Settings(
-        s3_endpoint=None,
-        s3_bucket=bucket_name,
-        sandbox_supervisor_url="http://sandbox-supervisor",
-    )
-    object_store = ObjectStore(test_settings)
-
-    from control_plane_app.main import AppState
-
-    state = AppState()
-    state.object_store = object_store
-    state.workspace_store = WorkspaceStateStore(object_store)
-    state.conversation_store = ConversationStateStore(object_store)
-    state.run_store = RunStateStore(object_store)
-    state.approval_store = ApprovalStateStore(object_store)
-    state.app_state_store = AppStateStore(object_store)
-    state.workspace_import_service = WorkspaceImportService(
-        settings=test_settings,
-        object_store=object_store,
-    )
-    state.question_orchestrator = QuestionOrchestrator(
-        sandbox_client=SandboxSupervisorClient(
-            test_settings.sandbox_supervisor_url,
-            timeout_seconds=10,
-        ),
-        conversation_store=state.conversation_store,
-        run_store=state.run_store,
-        workspace_store=state.workspace_store,
-        approval_store=state.approval_store,
-        app_state_store=state.app_state_store,
-    )
-    control_plane_app.state.state = state
+    test_settings = build_test_settings(bucket_name=bucket_name, tmp_path=tmp_path)
+    state = build_test_state(test_settings)
 
     client = TestClient(control_plane_app)
     headers = {
@@ -396,64 +334,16 @@ def test_get_me_recovers_admin_for_adminless_tenant() -> None:
 
 
 @mock_aws
-def test_private_repo_definition_stores_secret_outside_app_state() -> None:
+def test_private_repo_definition_stores_secret_outside_app_state(tmp_path: Path) -> None:
     bucket_name = "code-analyst-private-repo-test"
     boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
 
-    from control_plane_app.config import Settings
-    from control_plane_app.object_store import ObjectStore
-    from control_plane_app.app_state_store import AppStateStore
-    from control_plane_app.repository_checkout import build_repository_checkout_service
-    from control_plane_app.secret_store import build_secret_store
-    from control_plane_app.state_store import (
-        ApprovalStateStore,
-        ConversationStateStore,
-        RunStateStore,
-        WorkspaceStateStore,
-    )
-    from control_plane_app.workspace_imports import WorkspaceImportService
-    from control_plane_app.question_orchestrator import QuestionOrchestrator
-    from control_plane_app.sandbox_supervisor_client import SandboxSupervisorClient
-
-    test_settings = Settings(
-        s3_endpoint=None,
-        s3_bucket=bucket_name,
+    test_settings = build_test_settings(
+        bucket_name=bucket_name,
+        tmp_path=tmp_path,
         secret_store_s3_bucket=bucket_name,
-        sandbox_supervisor_url="http://sandbox-supervisor",
     )
-    object_store = ObjectStore(test_settings)
-
-    from control_plane_app.main import AppState
-
-    state = AppState()
-    state.object_store = object_store
-    state.workspace_store = WorkspaceStateStore(object_store)
-    state.conversation_store = ConversationStateStore(object_store)
-    state.run_store = RunStateStore(object_store)
-    state.approval_store = ApprovalStateStore(object_store)
-    state.app_state_store = AppStateStore(object_store)
-    state.secret_store = build_secret_store(test_settings)
-    state.repository_checkout_service = build_repository_checkout_service(
-        test_settings,
-        secret_store=state.secret_store,
-    )
-    state.workspace_import_service = WorkspaceImportService(
-        settings=test_settings,
-        object_store=object_store,
-        repository_checkout_service=state.repository_checkout_service,
-    )
-    state.question_orchestrator = QuestionOrchestrator(
-        sandbox_client=SandboxSupervisorClient(
-            test_settings.sandbox_supervisor_url,
-            timeout_seconds=10,
-        ),
-        conversation_store=state.conversation_store,
-        run_store=state.run_store,
-        workspace_store=state.workspace_store,
-        approval_store=state.approval_store,
-        app_state_store=state.app_state_store,
-    )
-    control_plane_app.state.state = state
+    state = build_test_state(test_settings)
 
     client = TestClient(control_plane_app)
     headers = {
