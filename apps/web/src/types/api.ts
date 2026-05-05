@@ -159,6 +159,11 @@ export interface RepositoryAdapterCreateRequest {
   credential_ref?: string | null;
 }
 
+export interface RepositoryAdapterUpdateRequest {
+  auth_kind?: string | null;
+  access_secret?: Record<string, unknown> | null;
+}
+
 export interface RepositoryDefinition {
   tenant_id: string;
   repo_def_id: string;
@@ -167,6 +172,7 @@ export interface RepositoryDefinition {
   adapter: RepositoryAdapter;
   team_ids: string[];
   created_at: string;
+  archived_at?: string | null;
 }
 
 export interface User {
@@ -297,6 +303,13 @@ export interface RepositoryDefinitionCreateResponse {
 export interface RepositoryDefinitionListResponse {
   tenant_id: string;
   repo_definitions: RepositoryDefinition[];
+}
+
+export interface RepositoryDefinitionUpdateRequest {
+  name?: string | null;
+  endpoint?: string | null;
+  team_ids?: string[] | null;
+  adapter?: RepositoryAdapterUpdateRequest | null;
 }
 
 export interface RepositoryDefinitionUpdateTeamsRequest {

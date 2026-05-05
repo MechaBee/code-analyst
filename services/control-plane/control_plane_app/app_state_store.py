@@ -231,14 +231,19 @@ class AppStateStore:
     def list_repo_definitions(
         self,
         tenant_id: str,
+        include_archived: bool = False,
     ) -> list[RepositoryDefinition]:
         db = self.load_tenant_db(tenant_id)
-        return list(db.repo_definitions.values())
+        repo_defs = list(db.repo_definitions.values())
+        if include_archived:
+            return repo_defs
+        return [repo_def for repo_def in repo_defs if repo_def.archived_at is None]
 
     def list_repo_definitions_for_principal(
         self,
         tenant_id: str,
         user_email: str,
+        include_archived: bool = False,
     ) -> list[RepositoryDefinition]:
         db = self.load_tenant_db(tenant_id)
         user_team_ids = {
@@ -249,7 +254,46 @@ class AppStateStore:
         return [
             rd for rd in db.repo_definitions.values()
             if any(tid in user_team_ids for tid in rd.team_ids)
+            and (include_archived or rd.archived_at is None)
         ]
+
+    def replace_repo_definition(
+        self,
+        tenant_id: str,
+        repo_def: RepositoryDefinition,
+    ) -> RepositoryDefinition:
+        db = self.load_tenant_db(tenant_id)
+        if repo_def.repo_def_id not in db.repo_definitions:
+            raise KeyError(f"Repository definition {repo_def.repo_def_id} not found")
+        db.repo_definitions[repo_def.repo_def_id] = repo_def
+        self.save_tenant_db(tenant_id, db)
+        return repo_def
+
+    def archive_repo_definition(
+        self,
+        tenant_id: str,
+        repo_def_id: str,
+    ) -> RepositoryDefinition:
+        existing = self.get_repo_definition(tenant_id, repo_def_id)
+        if existing is None:
+            raise KeyError(f"Repository definition {repo_def_id} not found")
+        if existing.archived_at is not None:
+            return existing
+        updated = existing.model_copy(update={"archived_at": utc_now()})
+        return self.replace_repo_definition(tenant_id, updated)
+
+    def restore_repo_definition(
+        self,
+        tenant_id: str,
+        repo_def_id: str,
+    ) -> RepositoryDefinition:
+        existing = self.get_repo_definition(tenant_id, repo_def_id)
+        if existing is None:
+            raise KeyError(f"Repository definition {repo_def_id} not found")
+        if existing.archived_at is None:
+            return existing
+        updated = existing.model_copy(update={"archived_at": None})
+        return self.replace_repo_definition(tenant_id, updated)
 
     def update_repo_definition_teams(
         self,
@@ -262,8 +306,7 @@ class AppStateStore:
             raise KeyError(f"Repository definition {repo_def_id} not found")
         existing = db.repo_definitions[repo_def_id]
         updated = existing.model_copy(update={"team_ids": team_ids})
-        db.repo_definitions[repo_def_id] = updated
-        self.save_tenant_db(tenant_id, db)
+        self.replace_repo_definition(tenant_id, updated)
         return RepositoryDefinitionUpdateTeamsResponse(
             tenant_id=tenant_id,
             repo_def_id=repo_def_id,

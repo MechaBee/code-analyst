@@ -301,6 +301,151 @@ def test_question_flow_disposes_sandbox_when_not_resuming(
     # The sandbox should have been disposed because resume_sandbox=False
     assert len(sandbox_supervisor_app.state.state.sessions) == 0
 
+
+@mock_aws
+def test_archived_repo_conversation_can_still_execute_questions(
+    tmp_path: Path,
+    sample_git_repo: Path,
+) -> None:
+    bucket_name = "code-analyst-archived-repo-question-flow"
+    boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket_name)
+
+    control_plane_settings = ControlPlaneSettings(
+        s3_endpoint=None,
+        s3_bucket=bucket_name,
+        workspace_tmp_dir=str(tmp_path / "control-plane-tmp"),
+        sandbox_supervisor_url="http://sandbox-supervisor",
+    )
+    sandbox_settings = SandboxSupervisorSettings(
+        s3_endpoint=None,
+        s3_bucket=bucket_name,
+        workspace_root_dir=str(tmp_path / "sandboxes"),
+    )
+
+    supervisor_state = SandboxSupervisorAppState()
+    supervisor_state.sessions = {}
+    supervisor_state.materializer = WorkspaceMaterializer(
+        settings=sandbox_settings,
+        object_store=SandboxObjectStore(sandbox_settings),
+    )
+    supervisor_state.analysis_adapter = DeterministicAnalysisAdapter()
+    sandbox_supervisor_app.state.state = supervisor_state
+
+    sandbox_transport = httpx.ASGITransport(app=sandbox_supervisor_app)
+    control_plane_state = ControlPlaneAppState()
+    control_plane_state.object_store = ControlPlaneObjectStore(control_plane_settings)
+    control_plane_state.workspace_store = WorkspaceStateStore(control_plane_state.object_store)
+    control_plane_state.conversation_store = ConversationStateStore(
+        control_plane_state.object_store
+    )
+    control_plane_state.run_store = RunStateStore(control_plane_state.object_store)
+    control_plane_state.approval_store = ApprovalStateStore(control_plane_state.object_store)
+    control_plane_state.app_state_store = AppStateStore(control_plane_state.object_store)
+    control_plane_state.workspace_import_service = WorkspaceImportService(
+        settings=control_plane_settings,
+        object_store=control_plane_state.object_store,
+    )
+    control_plane_state.question_orchestrator = QuestionOrchestrator(
+        sandbox_client=SandboxSupervisorClient(
+            "http://sandbox-supervisor",
+            transport=sandbox_transport,
+        ),
+        conversation_store=control_plane_state.conversation_store,
+        run_store=control_plane_state.run_store,
+        workspace_store=control_plane_state.workspace_store,
+        approval_store=control_plane_state.approval_store,
+        app_state_store=control_plane_state.app_state_store,
+    )
+    control_plane_app.state.state = control_plane_state
+
+    client = TestClient(control_plane_app)
+    admin_headers = {
+        "X-Tenant-Id": "tenant_test",
+        "X-User-Email": "admin@test.com",
+    }
+    member_headers = {
+        "X-Tenant-Id": "tenant_test",
+        "X-User-Email": "member@test.com",
+    }
+
+    client.post(
+        "/v1/users",
+        json={"email": "admin@test.com", "name": "Admin", "is_admin": True},
+        headers=admin_headers,
+    )
+    team_resp = client.post(
+        "/v1/teams",
+        json={"name": "Dev Team"},
+        headers=admin_headers,
+    )
+    team_id = team_resp.json()["team_id"]
+    client.post(
+        "/v1/users",
+        json={"email": "member@test.com", "name": "Member", "is_admin": False},
+        headers=admin_headers,
+    )
+    client.post(
+        f"/v1/teams/{team_id}/members",
+        json={"user_email": "member@test.com"},
+        headers=admin_headers,
+    )
+
+    repo_resp = client.post(
+        "/v1/repos",
+        json={
+            "name": "Question Repo",
+            "endpoint": str(sample_git_repo),
+            "adapter": {"kind": "github", "credential_ref": "public"},
+            "team_ids": [team_id],
+        },
+        headers=admin_headers,
+    )
+    assert repo_resp.status_code == 200
+    repo_def_id = repo_resp.json()["repo_def_id"]
+
+    checkout_resp = client.post(
+        f"/v1/repos/{repo_def_id}/checkouts",
+        json={"repo_def_id": repo_def_id, "ref": "main"},
+        headers=member_headers,
+    )
+    assert checkout_resp.status_code == 200
+    checkout_payload = checkout_resp.json()
+
+    conversation_resp = client.post(
+        "/v1/conversations",
+        json={
+            "tenant_id": "tenant_test",
+            "repo_def_id": repo_def_id,
+            "checkout_id": checkout_payload["checkout_id"],
+            "workspace_id": checkout_payload["workspace_id"],
+            "title": "Archived repo conversation",
+        },
+        headers=member_headers,
+    )
+    assert conversation_resp.status_code == 200
+    conversation_id = conversation_resp.json()["conversation_id"]
+
+    archive_resp = client.delete(f"/v1/repos/{repo_def_id}", headers=admin_headers)
+    assert archive_resp.status_code == 200
+    assert archive_resp.json()["archived_at"] is not None
+
+    question_resp = client.post(
+        f"/v1/conversations/{conversation_id}/questions",
+        json={
+            "message": "What does the sample repository return?",
+            "resume_sandbox": True,
+        },
+        headers=member_headers,
+    )
+    assert question_resp.status_code == 200
+    run_payload = question_resp.json()
+    assert run_payload["status"] == "COMPLETED"
+
+    run_state = control_plane_app.state.state.run_store.get_run(run_payload["run_id"])
+    assert run_state is not None
+    assert run_state.answer is not None
+    assert "forty-two" in run_state.answer.answer_markdown
+
     run_state = control_plane_app.state.state.run_store.get_run(run_payload["run_id"])
     assert run_state is not None
     assert run_state.sandbox_id is not None

@@ -192,8 +192,13 @@ export default function ChatPage() {
     if (repo) {
       return repo.name || repo.endpoint;
     }
-    return conversation?.repo_def_id || 'Repository';
+    if (conversation?.repo_def_id) {
+      return 'Archived repository';
+    }
+    return 'Repository';
   }, [conversation?.repo_def_id, repo]);
+
+  const isRepoArchived = repo?.archived_at != null;
 
   const branchLabel = useMemo(() => {
     if (checkout?.branch) {
@@ -494,6 +499,7 @@ export default function ChatPage() {
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
                     <ScopePill label={repoLabel} />
+                    {isRepoArchived && <ScopePill label="Archived" />}
                     {branchLabel && <ScopePill label={branchLabel} />}
                     {createdLabel && <ScopePill label={`Created ${createdLabel}`} />}
                   </div>
@@ -505,7 +511,7 @@ export default function ChatPage() {
               <button
                 type="button"
                 onClick={handleCreateConversation}
-                disabled={!conversation?.repo_def_id || isCreatingConversation}
+                disabled={!conversation?.repo_def_id || isCreatingConversation || isRepoArchived}
                 className="rounded-2xl border border-line bg-cream px-3 py-2 text-sm font-medium text-ink transition hover:border-accent/20 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
               >
                 New

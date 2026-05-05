@@ -27,9 +27,11 @@ from code_analyst_contracts import (
     RepositoryDefinitionCreateRequest,
     RepositoryDefinitionCreateResponse,
     RepositoryDefinitionListResponse,
+    RepositoryDefinitionUpdateRequest,
     RepositoryDefinitionUpdateTeamsRequest,
     RepositoryDefinitionUpdateTeamsResponse,
     RepositoryAdapter,
+    RepositoryAdapterUpdateRequest,
     Team,
     TeamCreateRequest,
     TeamCreateResponse,
@@ -155,6 +157,7 @@ async def create_conversation(
     if repo_def is None:
         raise HTTPException(status_code=404, detail="Repository definition not found.")
     ensure_repo_access(principal, repo_def)
+    ensure_repo_is_active(repo_def)
 
     # Resolve workspace_id from checkout or request
     workspace_id: str | None = None
@@ -446,6 +449,20 @@ def normalize_team_name(name: str) -> str:
     return normalized
 
 
+def normalize_repo_name(name: str | None) -> str | None:
+    if name is None:
+        return None
+    normalized = name.strip()
+    return normalized or None
+
+
+def normalize_repo_endpoint(endpoint: str | None) -> str:
+    normalized = (endpoint or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Repository endpoint is required.")
+    return normalized
+
+
 def normalize_team_ids(tenant_id: str, team_ids: list[str]) -> list[str]:
     seen: set[str] = set()
     normalized: list[str] = []
@@ -482,6 +499,164 @@ def principal_can_access_repo(principal: User, repo_def: RepositoryDefinition) -
 def ensure_repo_access(principal: User, repo_def: RepositoryDefinition) -> None:
     if not principal_can_access_repo(principal, repo_def):
         raise HTTPException(status_code=403, detail="Access denied to this repository.")
+
+
+def ensure_repo_is_active(repo_def: RepositoryDefinition) -> None:
+    if repo_def.archived_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Repository is archived.",
+        )
+
+
+def resolve_repo_adapter_update(
+    *,
+    tenant_id: str,
+    existing_adapter: RepositoryAdapter,
+    update_request: RepositoryAdapterUpdateRequest,
+) -> tuple[RepositoryAdapter, str | None, str | None]:
+    auth_kind = (existing_adapter.auth_kind or "public").strip().lower() or "public"
+    if "auth_kind" in update_request.model_fields_set and update_request.auth_kind is not None:
+        auth_kind = update_request.auth_kind.strip().lower() or "public"
+
+    if auth_kind not in {"public", "token"}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported repository auth_kind {auth_kind!r}.",
+        )
+
+    if auth_kind == "public":
+        return (
+            RepositoryAdapter(
+                kind=existing_adapter.kind,
+                auth_kind="public",
+                access_secret_ref=None,
+                credential_ref=None,
+            ),
+            None,
+            existing_adapter.access_secret_ref,
+        )
+
+    access_secret = (
+        update_request.access_secret
+        if "access_secret" in update_request.model_fields_set
+        else None
+    )
+    if access_secret is not None:
+        try:
+            new_secret_ref = app.state.state.secret_store.store_secret(
+                tenant_id=tenant_id,
+                secret=access_secret,
+            )
+        except SecretStoreError as error:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to store repository access secret: {error}",
+            ) from error
+
+        return (
+            RepositoryAdapter(
+                kind=existing_adapter.kind,
+                auth_kind="token",
+                access_secret_ref=new_secret_ref,
+                credential_ref=None,
+            ),
+            new_secret_ref,
+            existing_adapter.access_secret_ref,
+        )
+
+    if existing_adapter.access_secret_ref or (existing_adapter.credential_ref or "").strip():
+        return (
+            RepositoryAdapter(
+                kind=existing_adapter.kind,
+                auth_kind="token",
+                access_secret_ref=existing_adapter.access_secret_ref,
+                credential_ref=existing_adapter.credential_ref,
+            ),
+            None,
+            None,
+        )
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Token-based repositories require an existing secret or credential_ref, "
+            "or a new access_secret."
+        ),
+    )
+
+
+async def apply_repo_definition_update(
+    *,
+    principal: User,
+    repo_def_id: str,
+    body: RepositoryDefinitionUpdateRequest,
+) -> RepositoryDefinition:
+    existing = await run_in_threadpool(
+        app.state.state.app_state_store.get_repo_definition,
+        principal.tenant_id,
+        repo_def_id,
+    )
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Repository definition not found.")
+
+    updates: dict[str, object] = {}
+    if "name" in body.model_fields_set:
+        updates["name"] = normalize_repo_name(body.name)
+    if "endpoint" in body.model_fields_set:
+        updates["endpoint"] = normalize_repo_endpoint(body.endpoint)
+    if "team_ids" in body.model_fields_set and body.team_ids is not None:
+        updates["team_ids"] = normalize_team_ids(principal.tenant_id, body.team_ids)
+
+    new_secret_ref: str | None = None
+    old_secret_ref_to_delete: str | None = None
+    if "adapter" in body.model_fields_set and body.adapter is not None:
+        adapter, new_secret_ref, old_secret_ref_to_delete = resolve_repo_adapter_update(
+            tenant_id=principal.tenant_id,
+            existing_adapter=existing.adapter,
+            update_request=body.adapter,
+        )
+        updates["adapter"] = adapter
+
+    updated_repo = existing.model_copy(update=updates)
+    try:
+        updated_repo = await run_in_threadpool(
+            app.state.state.app_state_store.replace_repo_definition,
+            principal.tenant_id,
+            updated_repo,
+        )
+    except Exception:
+        if new_secret_ref is not None:
+            try:
+                app.state.state.secret_store.delete_secret(
+                    tenant_id=principal.tenant_id,
+                    secret_ref=new_secret_ref,
+                )
+            except SecretStoreError:
+                logger.warning(
+                    "Failed to roll back stored repository secret after repo update failure: tenant_id=%s repo_def_id=%s",
+                    principal.tenant_id,
+                    repo_def_id,
+                )
+        raise
+
+    if (
+        old_secret_ref_to_delete is not None
+        and old_secret_ref_to_delete != updated_repo.adapter.access_secret_ref
+    ):
+        try:
+            app.state.state.secret_store.delete_secret(
+                tenant_id=principal.tenant_id,
+                secret_ref=old_secret_ref_to_delete,
+            )
+        except SecretStoreError:
+            logger.warning(
+                "Failed to delete superseded repository secret after repo update: tenant_id=%s repo_def_id=%s",
+                principal.tenant_id,
+                repo_def_id,
+            )
+
+    return updated_repo
 
 
 # ---------------------------------------------------------------------------
@@ -609,7 +784,7 @@ async def get_admin_team_detail(
     repositories = sorted(
         (
             repo_def for repo_def in db.repo_definitions.values()
-            if team_id in repo_def.team_ids
+            if team_id in repo_def.team_ids and repo_def.archived_at is None
         ),
         key=lambda repo_def: ((repo_def.name or repo_def.endpoint).lower(), repo_def.repo_def_id),
     )
@@ -623,12 +798,16 @@ async def get_admin_team_detail(
 
 
 @app.get("/v1/admin/repos", response_model=RepositoryDefinitionListResponse)
-async def list_admin_repo_definitions(request: Request) -> RepositoryDefinitionListResponse:
+async def list_admin_repo_definitions(
+    request: Request,
+    include_archived: bool = False,
+) -> RepositoryDefinitionListResponse:
     principal = await ensure_user(request)
     require_admin(principal)
     repo_defs = await run_in_threadpool(
         app.state.state.app_state_store.list_repo_definitions,
         principal.tenant_id,
+        include_archived,
     )
     return RepositoryDefinitionListResponse(
         tenant_id=principal.tenant_id,
@@ -781,8 +960,8 @@ async def create_repo_definition(
     repo_def = RepositoryDefinition(
         tenant_id=principal.tenant_id,
         repo_def_id=new_id("repo"),
-        name=body.name.strip() if body.name else None,
-        endpoint=body.endpoint,
+        name=normalize_repo_name(body.name),
+        endpoint=normalize_repo_endpoint(body.endpoint),
         adapter=adapter,
         team_ids=team_ids,
     )
@@ -867,13 +1046,65 @@ async def update_repo_definition_teams(
 ) -> RepositoryDefinitionUpdateTeamsResponse:
     principal = await ensure_user(request)
     require_admin(principal)
-    team_ids = normalize_team_ids(principal.tenant_id, body.team_ids)
-    return await run_in_threadpool(
-        app.state.state.app_state_store.update_repo_definition_teams,
-        principal.tenant_id,
-        repo_def_id,
-        team_ids,
+    updated_repo = await apply_repo_definition_update(
+        principal=principal,
+        repo_def_id=repo_def_id,
+        body=RepositoryDefinitionUpdateRequest(team_ids=body.team_ids),
     )
+    return RepositoryDefinitionUpdateTeamsResponse(
+        tenant_id=updated_repo.tenant_id,
+        repo_def_id=updated_repo.repo_def_id,
+        team_ids=updated_repo.team_ids,
+    )
+
+
+@app.patch("/v1/repos/{repo_def_id}", response_model=RepositoryDefinition)
+async def update_repo_definition(
+    request: Request,
+    repo_def_id: str,
+    body: RepositoryDefinitionUpdateRequest,
+) -> RepositoryDefinition:
+    principal = await ensure_user(request)
+    require_admin(principal)
+    return await apply_repo_definition_update(
+        principal=principal,
+        repo_def_id=repo_def_id,
+        body=body,
+    )
+
+
+@app.delete("/v1/repos/{repo_def_id}", response_model=RepositoryDefinition)
+async def archive_repo_definition(
+    request: Request,
+    repo_def_id: str,
+) -> RepositoryDefinition:
+    principal = await ensure_user(request)
+    require_admin(principal)
+    try:
+        return await run_in_threadpool(
+            app.state.state.app_state_store.archive_repo_definition,
+            principal.tenant_id,
+            repo_def_id,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Repository definition not found.") from error
+
+
+@app.post("/v1/repos/{repo_def_id}/restore", response_model=RepositoryDefinition)
+async def restore_repo_definition(
+    request: Request,
+    repo_def_id: str,
+) -> RepositoryDefinition:
+    principal = await ensure_user(request)
+    require_admin(principal)
+    try:
+        return await run_in_threadpool(
+            app.state.state.app_state_store.restore_repo_definition,
+            principal.tenant_id,
+            repo_def_id,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Repository definition not found.") from error
 
 
 # ---------------------------------------------------------------------------
@@ -895,6 +1126,7 @@ async def create_checkout(
     if repo_def is None:
         raise HTTPException(status_code=404, detail="Repository definition not found.")
     ensure_repo_access(principal, repo_def)
+    ensure_repo_is_active(repo_def)
 
     # Import via workspace service using the repo def's adapter
     try:

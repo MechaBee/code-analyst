@@ -21,6 +21,7 @@ import type {
   RepositoryDefinitionCreateRequest,
   RepositoryDefinitionCreateResponse,
   RepositoryDefinitionListResponse,
+  RepositoryDefinitionUpdateRequest,
   RepositoryDefinitionUpdateTeamsRequest,
   RepositoryDefinitionUpdateTeamsResponse,
   TeamCreateRequest,
@@ -147,16 +148,31 @@ export function useApi() {
           method: 'POST',
           body: JSON.stringify(req),
         }),
-      listAdminRepoDefinitions: () =>
-        apiFetch<RepositoryDefinitionListResponse>('/v1/admin/repos'),
+      listAdminRepoDefinitions: (includeArchived: boolean = false) =>
+        apiFetch<RepositoryDefinitionListResponse>(
+          `/v1/admin/repos${includeArchived ? '?include_archived=true' : ''}`
+        ),
       listRepoDefinitions: () =>
         apiFetch<RepositoryDefinitionListResponse>('/v1/repos'),
       getRepoDefinition: (repoDefId: string) =>
         apiFetch<RepositoryDefinition>(`/v1/repos/${repoDefId}`),
+      updateRepoDefinition: (repoDefId: string, req: RepositoryDefinitionUpdateRequest) =>
+        apiFetch<RepositoryDefinition>(`/v1/repos/${repoDefId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(req),
+        }),
       updateRepoDefinitionTeams: (repoDefId: string, req: RepositoryDefinitionUpdateTeamsRequest) =>
         apiFetch<RepositoryDefinitionUpdateTeamsResponse>(`/v1/repos/${repoDefId}/teams`, {
           method: 'PATCH',
           body: JSON.stringify(req),
+        }),
+      archiveRepoDefinition: (repoDefId: string) =>
+        apiFetch<RepositoryDefinition>(`/v1/repos/${repoDefId}`, {
+          method: 'DELETE',
+        }),
+      restoreRepoDefinition: (repoDefId: string) =>
+        apiFetch<RepositoryDefinition>(`/v1/repos/${repoDefId}/restore`, {
+          method: 'POST',
         }),
 
       // Phase 2: Checkouts

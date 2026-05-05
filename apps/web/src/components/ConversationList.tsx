@@ -23,7 +23,9 @@ export default function ConversationList({ conversations, repoNames, onSelect }:
       {Object.entries(grouped).map(([repoDefId, convs]) => (
         <div key={repoDefId} className="space-y-2">
           <h4 className="px-3 text-xs font-semibold uppercase tracking-wide text-muted">
-            {repoDefId === '__none__' ? 'Unscoped' : (repoNames[repoDefId] || repoDefId)}
+            {repoDefId === '__none__'
+              ? 'Unscoped'
+              : (repoNames[repoDefId] || 'Archived repository')}
           </h4>
           <div className="space-y-1">
             {convs.map((conv) => (
